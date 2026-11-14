@@ -6,7 +6,7 @@ import { computeStats, dayChart, barChart, parcelsCsv } from './report.js';
 import { icon } from './icons.js';
 
 const BRAND = 'Willbrandt und Kompagnon';
-const APP_VERSION = '12';
+const APP_VERSION = '13';
 const AUTO_LOGOUT_MIN = 20;
 // Test-App: wird von der Vorführseite gesetzt (window.PAKETLAGER_TEST = true)
 const TEST_APP = window.PAKETLAGER_TEST === true;
@@ -137,7 +137,7 @@ function resetIdle() {
 
 const TITLES = {
   setup: 'Willkommen', login: 'Anmelden', ein: 'Einlagern', aus: 'Ausgabe', bestand: 'Bestand',
-  bericht: 'Cockpit', mehr: 'Mehr', plaetze: 'Boxen', team: 'Team', einstellungen: 'Einstellungen',
+  bericht: 'Cockpit', mehr: 'Mehr', plaetze: 'Boxen', team: 'Zugänge', einstellungen: 'Einstellungen',
 };
 const TABS = [
   { route: 'ein', label: 'Einlagern', icon: 'einlagern' },
@@ -232,19 +232,19 @@ window.addEventListener('hashchange', render);
 function viewMehr() {
   const tiles = [
     user.role === 'admin' && { href: '#plaetze', icon: 'plaetze', title: 'Boxen', sub: 'Boxen anlegen, Etiketten drucken' },
-    user.role === 'admin' && { href: '#team', icon: 'team', title: 'Team', sub: 'Personen, Rollen und PINs' },
+    user.role === 'admin' && { href: '#team', icon: 'team', title: 'Zugänge', sub: 'PINs für Team und Chefin' },
     user.role === 'admin' && { href: '#einstellungen', icon: 'einstellungen', title: 'Einstellungen', sub: 'Fristen, Datensicherung' },
     { href: '#ruecksendungen', icon: 'retoure', title: 'Rücksendungen', sub: 'Pakete mit abgelaufener Frist' },
   ].filter(Boolean);
   main.innerHTML = `
     <section class="signed-in">
       <span class="muted">Angemeldet als</span>
-      <strong>${esc(user.name)} · ${user.role === 'admin' ? 'Chefin' : 'Mitarbeiterin'}</strong>
+      <strong>${esc(user.name)}</strong>
     </section>
     <h2 class="lead">Was möchten Sie erledigen?</h2>
     <div class="tiles">
       ${tiles.map(t => `<a class="tile" href="${t.href}">${icon(t.icon, 'tile-ic')}<span class="tile-title">${t.title}</span><span class="tile-sub">${t.sub}</span></a>`).join('')}
-      <button class="tile" id="logout">${icon('abmelden', 'tile-ic')}<span class="tile-title">Wechseln</span><span class="tile-sub">Abmelden, andere Person meldet sich an</span></button>
+      <button class="tile" id="logout">${icon('abmelden', 'tile-ic')}<span class="tile-title">Abmelden</span><span class="tile-sub">Zwischen Team und Chefin wechseln</span></button>
       ${TEST_APP ? `<button class="tile" id="testreset">${icon('retoure', 'tile-ic')}<span class="tile-title">Test neu starten</span><span class="tile-sub">Alles zurück auf die Abrafaxe-Testdaten</span></button>` : ''}
     </div>`;
   $('#testreset')?.addEventListener('click', async () => {
@@ -263,25 +263,26 @@ function viewSetup() {
   main.innerHTML = `
     <section class="card narrow">
       <h2>Einmalige Einrichtung</h2>
-      <p class="muted">Danach melden sich alle mit Name und PIN an.</p>
+      <p class="muted">RegalLotse hat genau zwei Zugänge: <b>Team</b> für die tägliche Arbeit und <b>Chefin</b> für Cockpit, Boxen und Einstellungen. Namen von Mitarbeiterinnen werden nicht gespeichert.</p>
       <form id="f" class="stack">
         <label>Name der Filiale<input name="filiale" required placeholder="z. B. Postfiliale 546, Dorfstr. 25"></label>
-        <label>Name der Chefin / des Admins<input name="name" required autocomplete="off"></label>
-        <label>PIN (4–8 Ziffern)<input name="pin" required inputmode="numeric" type="password" pattern="\\d{4,8}" autocomplete="new-password"></label>
-        <label>PIN wiederholen<input name="pin2" required inputmode="numeric" type="password" pattern="\\d{4,8}" autocomplete="new-password"></label>
-        <label class="check"><input type="checkbox" name="demo" checked> Beispiel-Boxen und Testpakete anlegen (zum Ausprobieren)</label>
+        <label>PIN für das Team (4–8 Ziffern)<input name="pinTeam" required inputmode="numeric" type="password" pattern="\\d{4,8}" autocomplete="new-password"></label>
+        <label>PIN für die Chefin (4–8 Ziffern)<input name="pin" required inputmode="numeric" type="password" pattern="\\d{4,8}" autocomplete="new-password"></label>
+        <label>PIN für die Chefin wiederholen<input name="pin2" required inputmode="numeric" type="password" pattern="\\d{4,8}" autocomplete="new-password"></label>
+        <label class="check"><input type="checkbox" name="demo"> Beispiel-Boxen und Testpakete anlegen (nur zum Ausprobieren)</label>
         <button class="btn primary big">Einrichten</button>
       </form>
     </section>`;
   $('#f').onsubmit = async e => {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target));
-    if (fd.pin !== fd.pin2) return toast('Die PINs stimmen nicht überein.', { type: 'error' });
+    if (fd.pin !== fd.pin2) return toast('Die beiden PINs der Chefin stimmen nicht überein.', { type: 'error' });
+    if (fd.pin === fd.pinTeam) return toast('Team und Chefin brauchen verschiedene PINs.', { type: 'error' });
     try {
       store.updateFiliale({ name: fd.filiale.trim() });
-      const id = await store.addUser({ name: fd.name, pin: fd.pin, role: 'admin' });
-      if (fd.demo) store.seedDemo(id);
-      setUser(await store.login(id, fd.pin));
+      const chefin = await store.setupAccounts({ pinChefin: fd.pin, pinTeam: fd.pinTeam });
+      if (fd.demo) store.seedDemo(chefin);
+      setUser(await store.login(chefin, fd.pin));
       go(fd.demo ? 'ein' : 'plaetze');
     } catch (err) { toast(err.message, { type: 'error' }); }
   };
@@ -294,7 +295,7 @@ function viewLogin() {
   main.innerHTML = `
     <section class="card narrow">
       <h2>Wer arbeitet gerade?</h2>
-      ${TEST_APP ? '<p class="test-hint"><b>Test-App:</b> PIN für Chefin <b>1234</b>, für Mitarbeiterin <b>0000</b></p>' : ''}
+      ${TEST_APP ? '<p class="test-hint"><b>Test-App:</b> PIN für Team <b>0000</b>, für Chefin <b>1234</b></p>' : ''}
       <div class="user-grid">${users.map(u => `<button class="user-tile" data-id="${u.id}">${esc(u.name)}</button>`).join('')}</div>
       <form id="pinform" class="stack hidden">
         <label><span id="pinlabel">PIN</span><input id="pin" inputmode="numeric" pattern="[0-9]*" type="password" autocomplete="off" maxlength="8" enterkeyhint="go"></label>
@@ -802,42 +803,26 @@ function viewPlaetze() {
 // ---------------- Team ----------------
 
 function viewTeam() {
-  const users = store.listUsers();
+  const users = store.listUsers().filter(u => u.active);
   main.innerHTML = `
-    <section class="card">
-      <h2>Personen</h2>
-      <ul class="list">${users.map(u => `<li data-id="${u.id}" class="${u.active ? '' : 'inactive'}">
-        <span class="grow"><b>${esc(u.name)}</b> ${u.id === user.id ? '<span class="muted">(du)</span>' : ''}</span>
-        <select data-role aria-label="Rolle"><option value="staff" ${u.role === 'staff' ? 'selected' : ''}>Mitarbeiterin</option><option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Chefin/Admin</option></select>
-        <button class="btn small" data-pin>PIN neu</button>
-        <button class="btn small" data-active>${u.active ? 'Sperren' : 'Entsperren'}</button></li>`).join('')}</ul>
-    </section>
     <section class="card narrow">
-      <h2>Neue Person</h2>
-      <form id="f" class="stack" autocomplete="off">
-        <label>Name<input name="name" required></label>
-        <label>Start-PIN (4–8 Ziffern)<input name="pin" required inputmode="numeric" pattern="\\d{4,8}"></label>
-        <label>Rolle<select name="role"><option value="staff">Mitarbeiterin</option><option value="admin">Chefin/Admin</option></select></label>
-        <button class="btn primary">Hinzufügen</button>
-      </form>
+      <h2>Zugänge</h2>
+      <p class="hint">RegalLotse hat zwei feste Zugänge. Das Team teilt sich eine PIN, die Chefin hat eine eigene. Ändern Sie die PINs, wenn jemand das Team verlässt.</p>
+      <ul class="list">${users.map(u => `<li data-id="${u.id}">
+        <span class="grow"><b>${esc(u.name)}</b><br><span class="muted small">${u.role === 'admin' ? 'Cockpit, Boxen, Zugänge, Einstellungen' : 'Einlagern, Ausgabe, Bestand'}</span></span>
+        <button class="btn small" data-pin>PIN ändern</button></li>`).join('')}</ul>
     </section>`;
-  const wrap = fn => async (...a) => { try { await fn(...a); viewTeam(); } catch (err) { toast(err.message, { type: 'error' }); } };
   $$('li[data-id]').forEach(li => {
     const id = li.dataset.id;
-    $('[data-role]', li).onchange = wrap(e => store.setUserRole(id, e.target.value));
-    $('[data-pin]', li).onclick = wrap(async () => {
-      const pin = await askText('Neue PIN (4–8 Ziffern):', { numeric: true, ok: 'PIN speichern' });
-      if (pin) { await store.setPin(id, pin.trim()); toast('PIN geändert.'); }
-    });
-    $('[data-active]', li).onclick = wrap(() => {
-      const u = users.find(x => x.id === id);
-      store.setUserActive(id, !u.active);
-    });
-  });
-  $('#f').onsubmit = wrap(async e => {
-    e.preventDefault();
-    await store.addUser(Object.fromEntries(new FormData(e.target)));
-    toast('Person angelegt.');
+    $('[data-pin]', li).onclick = async () => {
+      const pin = await askText(`Neue PIN für ${users.find(u => u.id === id).name} (4–8 Ziffern):`, { numeric: true, ok: 'PIN speichern' });
+      if (!pin) return;
+      try {
+        if (await store.pinInUse(pin.trim(), id)) throw new Error('Diese PIN hat schon der andere Zugang.');
+        await store.setPin(id, pin.trim());
+        toast('PIN geändert.');
+      } catch (err) { toast(err.message, { type: 'error' }); }
+    };
   });
 }
 

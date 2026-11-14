@@ -98,6 +98,20 @@ export function setUserRole(userId, role) {
   save();
 }
 
+/** Die zwei festen Zugänge anlegen. Liefert die ID der Chefin. */
+export async function setupAccounts({ pinChefin, pinTeam }) {
+  await addUser({ name: 'Team', pin: pinTeam, role: 'staff' });
+  return addUser({ name: 'Chefin', pin: pinChefin, role: 'admin' });
+}
+
+/** Hat ein anderer aktiver Zugang schon diese PIN? (sonst wäre nicht klar, wer sich anmeldet) */
+export async function pinInUse(pin, exceptId) {
+  for (const u of state.users) {
+    if (u.id !== exceptId && u.active && (await hashPin(pin, u.salt)) === u.pinHash) return true;
+  }
+  return false;
+}
+
 export async function login(userId, pin) {
   const u = state.users.find(x => x.id === userId && x.active);
   if (!u) return null;
@@ -310,15 +324,14 @@ export function resetAll() {
 }
 
 /** Stand der Testdaten. Erhöhen, damit alle Test-Geräte beim nächsten Öffnen frisch starten. */
-export const TEST_DATA_VERSION = 3;
+export const TEST_DATA_VERSION = 4;
 export const testDataVersion = () => state.testDataVersion ?? 1;
 
 /** Test-App: Filiale, Team und Testdaten auf einen Schlag. */
 export async function setupTestApp() {
   resetAll();
   updateFiliale({ name: 'Test-Filiale' });
-  const chefin = await addUser({ name: 'Chefin', pin: '1234', role: 'admin' });
-  await addUser({ name: 'Mitarbeiterin', pin: '0000', role: 'staff' });
+  const chefin = await setupAccounts({ pinChefin: '1234', pinTeam: '0000' });
   seedDemo(chefin);
   state.testDataVersion = TEST_DATA_VERSION;
   save();

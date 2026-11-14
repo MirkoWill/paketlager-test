@@ -4,7 +4,7 @@ Test- und Vorführversion der Lagerplatz-App **RegalLotse** von Willbrandt und K
 
 **Öffnen:** https://mirkowill.github.io/paketlager-test/
 
-- Anmeldung: Chefin, PIN `1234` · Mitarbeiterin, PIN `0000`
+- Anmeldung: Team, PIN `0000` · Chefin, PIN `1234`
 - Testkunden: die Abrafaxe (Abrax, Brabax, Califax, Don Ferrando)
 - Daten bleiben nur im Browser des jeweiligen Geräts. Zurücksetzen unter „Mehr“ → „Test neu starten“.
 
