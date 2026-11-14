@@ -345,6 +345,7 @@ export function seedDemo(userId) {
   for (const [id, label, letters] of rows) if (!getSlot(id)) addSlot({ id, label: 'Box ' + label, capacity: 8, letters });
   for (const id of ['REGAL-1', 'REGAL-2']) if (!getSlot(id)) addSlot({ id, label: 'Regal (beliebig)', capacity: 12 });
   if (!getSlot('BODEN-1')) addSlot({ id: 'BODEN-1', label: 'Boden, große Pakete', capacity: 16 });
+  if (!getSlot('A3')) addSlot({ id: 'A3', label: 'Regal A, Fach 3', capacity: 10 });
   // Testkunden: die Abrafaxe. Abrax, Brabax und Califax wohnen zusammen (gleicher Leitcode),
   // so zeigt die Ausgabe auch „weitere Pakete für diese Adresse“.
   const ZUHAUSE = '13051014003571', BURG = '13051088001572';
