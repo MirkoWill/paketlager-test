@@ -6,7 +6,7 @@ import { computeStats, dayChart, barChart, parcelsCsv } from './report.js';
 import { icon } from './icons.js';
 
 const BRAND = 'Willbrandt und Kompagnon';
-const APP_VERSION = '10';
+const APP_VERSION = '11';
 const AUTO_LOGOUT_MIN = 20;
 // Test-App: wird von der Vorführseite gesetzt (window.PAKETLAGER_TEST = true)
 const TEST_APP = window.PAKETLAGER_TEST === true;
@@ -26,6 +26,7 @@ try { user = JSON.parse(sessionStorage.getItem('paketlager.user')); } catch { /*
 
 function toast(text, { type = 'ok', action, onAction, ms = 4000 } = {}) {
   const box = $('#toasts');
+  box.replaceChildren(); // immer nur eine Meldung, damit nichts verdeckt wird
   const el = document.createElement('div');
   el.className = `toast ${type}`;
   el.innerHTML = `<span>${esc(text)}</span>${action ? `<button class="btn ghost small">${esc(action)}</button>` : ''}`;
@@ -136,7 +137,7 @@ function resetIdle() {
 
 const TITLES = {
   setup: 'Willkommen', login: 'Anmelden', ein: 'Einlagern', aus: 'Ausgabe', bestand: 'Bestand',
-  bericht: 'Cockpit', mehr: 'Mehr', plaetze: 'Lagerplätze', team: 'Team', einstellungen: 'Einstellungen',
+  bericht: 'Cockpit', mehr: 'Mehr', plaetze: 'Boxen', team: 'Team', einstellungen: 'Einstellungen',
 };
 const TABS = [
   { route: 'ein', label: 'Einlagern', icon: 'einlagern' },
@@ -216,6 +217,8 @@ function render() {
   else if (route === 'login' || route === 'setup') route = 'ein';
   if (ADMIN_ROUTES.includes(route) && user.role !== 'admin') route = 'ein';
   renderHeader(route);
+  document.onkeydown = null; // nur Einlagern setzt einen eigenen Handscanner-Empfang
+  $('#toasts').replaceChildren(); // Meldungen gehören zur vorigen Seite
   main.innerHTML = '';
   ({ setup: viewSetup, login: viewLogin, ein: viewEin, aus: viewAus, bestand: viewBestand, bericht: viewBericht, mehr: viewMehr,
      plaetze: viewPlaetze, team: viewTeam, einstellungen: viewEinstellungen }[route] ?? viewEin)();
@@ -228,7 +231,7 @@ window.addEventListener('hashchange', render);
 
 function viewMehr() {
   const tiles = [
-    user.role === 'admin' && { href: '#plaetze', icon: 'plaetze', title: 'Lagerplätze', sub: 'Boxen & Regale, QR-Etiketten drucken' },
+    user.role === 'admin' && { href: '#plaetze', icon: 'plaetze', title: 'Boxen', sub: 'Boxen anlegen, Etiketten drucken' },
     user.role === 'admin' && { href: '#team', icon: 'team', title: 'Team', sub: 'Personen, Rollen und PINs' },
     user.role === 'admin' && { href: '#einstellungen', icon: 'einstellungen', title: 'Einstellungen', sub: 'Fristen, Datensicherung' },
     { href: '#ruecksendungen', icon: 'retoure', title: 'Rücksendungen', sub: 'Pakete mit abgelaufener Frist' },
@@ -266,7 +269,7 @@ function viewSetup() {
         <label>Name der Chefin / des Admins<input name="name" required autocomplete="off"></label>
         <label>PIN (4–8 Ziffern)<input name="pin" required inputmode="numeric" type="password" pattern="\\d{4,8}" autocomplete="new-password"></label>
         <label>PIN wiederholen<input name="pin2" required inputmode="numeric" type="password" pattern="\\d{4,8}" autocomplete="new-password"></label>
-        <label class="check"><input type="checkbox" name="demo" checked> Beispiel-Lagerplätze und Testpakete anlegen (zum Ausprobieren)</label>
+        <label class="check"><input type="checkbox" name="demo" checked> Beispiel-Boxen und Testpakete anlegen (zum Ausprobieren)</label>
         <button class="btn primary big">Einrichten</button>
       </form>
     </section>`;
@@ -294,7 +297,7 @@ function viewLogin() {
       ${TEST_APP ? '<p class="test-hint"><b>Test-App:</b> PIN für Chefin <b>1234</b>, für Mitarbeiterin <b>0000</b></p>' : ''}
       <div class="user-grid">${users.map(u => `<button class="user-tile" data-id="${u.id}">${esc(u.name)}</button>`).join('')}</div>
       <form id="pinform" class="stack hidden">
-        <label><span id="pinlabel">PIN</span><input id="pin" inputmode="numeric" type="password" autocomplete="off" maxlength="8"></label>
+        <label><span id="pinlabel">PIN</span><input id="pin" inputmode="numeric" pattern="[0-9]*" type="password" autocomplete="off" maxlength="8" enterkeyhint="go"></label>
         <button class="btn primary big">Anmelden</button>
       </form>
     </section>`;
@@ -307,55 +310,93 @@ function viewLogin() {
     $('#pin').value = '';
     $('#pin').focus();
   });
-  $('#pinform').onsubmit = async e => {
-    e.preventDefault();
-    const u = await store.login(chosen, $('#pin').value);
-    if (!u) { $('#pin').value = ''; return toast('PIN falsch.', { type: 'error' }); }
+  const enter = u => {
+    try { localStorage.setItem('paketlager.lastuser', u.id); } catch { /* egal */ }
     setUser(u);
     go('ein');
   };
-  if (users.length === 1) $('.user-tile').click();
+  $('#pinform').onsubmit = async e => {
+    e.preventDefault();
+    const u = await store.login(chosen, $('#pin').value);
+    if (!u) { $('#pin').value = ''; return toast('Die PIN stimmt nicht. Bitte noch einmal.', { type: 'error' }); }
+    enter(u);
+  };
+  // Bei richtiger PIN sofort anmelden, ohne Knopf
+  $('#pin').addEventListener('input', async e => {
+    const v = e.target.value;
+    if (v.length < 4) return;
+    const u = await store.login(chosen, v);
+    if (u && $('#pin')?.value === v) enter(u);
+  });
+  let last = null;
+  try { last = localStorage.getItem('paketlager.lastuser'); } catch { /* egal */ }
+  const pre = users.length === 1 ? $('.user-tile') : last && $(`.user-tile[data-id="${last}"]`);
+  pre?.click();
 }
 
 // ---------------- Einlagern ----------------
 
-const draft = { tracking: '', carrier: '', leitcode: '', name: '', slotId: '' };
-const resetDraft = () => Object.assign(draft, { tracking: '', carrier: '', leitcode: '', name: '', slotId: '' });
+const draft = { tracking: '', carrier: '', leitcode: '', name: '', nameOk: false, slotId: '', info: '' };
+const resetDraft = () => Object.assign(draft, { tracking: '', carrier: '', leitcode: '', name: '', nameOk: false, slotId: '', info: '' });
 
+/**
+ * Einlagern in drei Schritten. Immer nur der aktuelle Schritt ist offen,
+ * erledigte Schritte zeigen ihr Ergebnis mit „Ändern“. Nach dem Box-Scan wird
+ * automatisch eingelagert (mit „Rückgängig“).
+ */
 function viewEin() {
   if (!store.listSlots().length) {
-    main.innerHTML = `<section class="card"><h2>Noch keine Lagerplätze</h2>
-      <p>${user.role === 'admin' ? 'Lege zuerst Lagerplätze an und drucke die QR-Etiketten.' : 'Bitte die Chefin, zuerst Lagerplätze anzulegen.'}</p>
-      ${user.role === 'admin' ? '<a class="btn primary" href="#plaetze">Lagerplätze anlegen</a>' : ''}</section>`;
+    main.innerHTML = `<section class="card"><h2>Noch keine Boxen angelegt</h2>
+      <p>${user.role === 'admin' ? 'Lege zuerst die Boxen an und drucke ihre QR-Etiketten.' : 'Bitte die Chefin, zuerst die Boxen anzulegen.'}</p>
+      ${user.role === 'admin' ? '<a class="btn primary" href="#plaetze">Boxen anlegen</a>' : ''}</section>`;
     return;
   }
+  const step = !draft.tracking ? 1 : !draft.nameOk ? 2 : 3;
+  const st = n => (n < step ? 'done' : n === step ? 'active' : 'todo');
   main.innerHTML = `
-    <section class="card">
-      <h2>Paket einlagern</h2>
-      <form id="f" class="stack" autocomplete="off">
-        <div class="field">
-          <label for="code">1 · Sendungsnummer scannen</label>
-          <div class="scanrow">
-            <input id="code" placeholder="Barcode scannen oder eintippen">
-            <button type="button" class="btn icon" id="cam1" title="Mit Kamera scannen" aria-label="Mit Kamera scannen">${icon('scan')}</button>
-          </div>
-          <div id="codeinfo" class="info"></div>
-        </div>
-        <div class="field">
-          <label for="name">2 · Name des Empfängers</label>
-          <input id="name" list="names" placeholder="Nachname, Vorname …">
-          <datalist id="names"></datalist>
-          <div id="nameinfo" class="info"></div>
-        </div>
-        <div class="field">
-          <label for="slot">3 · Box scannen <span class="muted">(Paket in eine Box mit Platz legen, dann deren QR-Code scannen)</span></label>
-          <div class="scanrow">
-            <select id="slot"></select>
-            <button type="button" class="btn icon" id="cam2" title="Box-QR mit Kamera scannen" aria-label="Box-QR mit Kamera scannen">${icon('scan')}</button>
-          </div>
-          <div id="slotinfo" class="info"></div>
-        </div>
-        <button class="btn primary big" id="save">${icon('einlagern')}Einlagern</button>
+    <section class="card flow" aria-label="Paket einlagern">
+      <form id="f" autocomplete="off">
+        <ol class="steps">
+          <li class="step ${st(1)}">
+            <div class="step-head">
+              <span class="step-no" aria-hidden="true">${step > 1 ? '✓' : '1'}</span>
+              <span class="step-title">Paket</span>
+              ${step > 1 ? `<span class="step-value">${esc(shortTracking(draft.tracking))}${draft.leitcode ? ' · Adresse ✓' : ''}</span><button type="button" class="link" data-edit="1">Ändern</button>` : ''}
+            </div>
+            <div class="step-body">
+              <button type="button" class="btn primary big" id="cam1">${icon('scan')}Paket scannen</button>
+              <div class="or"><span>oder eintippen</span></div>
+              <input id="code" placeholder="Sendungsnummer" enterkeyhint="next" autocapitalize="characters" spellcheck="false" aria-label="Sendungsnummer eintippen">
+              <div id="codeinfo" class="info" role="status">${draft.info}</div>
+            </div>
+          </li>
+          <li class="step ${st(2)}">
+            <div class="step-head">
+              <span class="step-no" aria-hidden="true">${step > 2 ? '✓' : '2'}</span>
+              <span class="step-title">Name</span>
+              ${step > 2 ? `<span class="step-value">${esc(draft.name)}</span><button type="button" class="link" data-edit="2">Ändern</button>` : ''}
+            </div>
+            <div class="step-body">
+              <input id="name" list="names" placeholder="Name vom Etikett" enterkeyhint="next" autocapitalize="words" spellcheck="false" aria-label="Name des Empfängers">
+              <datalist id="names"></datalist>
+              <div id="nameinfo" class="info" role="status"></div>
+              <button type="button" class="btn primary big" id="nameok">Weiter</button>
+            </div>
+          </li>
+          <li class="step ${st(3)}">
+            <div class="step-head">
+              <span class="step-no" aria-hidden="true">3</span>
+              <span class="step-title">Box</span>
+            </div>
+            <div class="step-body">
+              <p class="hint">Paket in eine Box mit Platz legen, dann das Etikett der Box scannen.</p>
+              <button type="button" class="btn primary big" id="cam2">${icon('scan')}Box scannen</button>
+              <div class="or"><span>oder auswählen</span></div>
+              <select id="slot" aria-label="Box auswählen"></select>
+            </div>
+          </li>
+        </ol>
+        ${step > 1 ? '<button type="button" class="link cancel" id="restart">Abbrechen und neu beginnen</button>' : ''}
       </form>
     </section>
     <section class="card">
@@ -364,117 +405,124 @@ function viewEin() {
     </section>`;
 
   const code = $('#code'), name = $('#name'), slot = $('#slot');
+  const rerender = () => viewEin();
 
-  function refreshSlots() {
-    slot.innerHTML = '<option value="">– Box wählen –</option>' + store.listSlots().map(s =>
-      `<option value="${esc(s.id)}" ${s.id === draft.slotId ? 'selected' : ''}>${esc(s.id)}${s.label ? ' · ' + esc(s.label) : ''}</option>`).join('');
-    $('#slotinfo').innerHTML = draft.slotId ? `✓ Box <b>${esc(draft.slotId)}</b>` : '';
-  }
+  slot.innerHTML = '<option value="">Box wählen …</option>' + store.listSlots().map(s =>
+    `<option value="${esc(s.id)}">${esc(s.id)}${s.label ? ' · ' + esc(s.label) : ''}</option>`).join('');
 
   function handleCode(raw) {
     const c = classifyCode(raw);
     code.value = '';
-    if (c.type === 'slot') return chooseSlot(c.value);
+    if (c.type === 'slot') {
+      if (step === 3) return chooseSlot(c.value);
+      draft.info = `<span class="warn">Das war das Etikett einer Box. Bitte zuerst die Sendungsnummer des Pakets scannen.</span>`;
+      return rerender();
+    }
     if (c.type === 'leitcode') {
       draft.leitcode = c.value;
       feedback();
-      $('#codeinfo').innerHTML = `<span class="warn">Das war der <b>Leitcode</b> (Adresse). Ist gemerkt. Jetzt bitte die <b>Sendungsnummer</b> scannen (meist der untere Code bzw. „JJD…“/„00340…“).</span>`;
-      return code.focus();
+      draft.info = `<span class="warn">Adresse erkannt ✓ Jetzt bitte den Code mit der Sendungsnummer scannen („JJD…“ oder „00340…“).</span>`;
+      return rerender();
     }
     if (c.type === 'unknown') {
-      $('#codeinfo').innerHTML = `<span class="error">Code nicht erkannt: ${esc(c.value || raw)}</span>`;
-      return code.focus();
+      draft.info = `<span class="error">Diesen Code kennt RegalLotse nicht: ${esc(c.value || raw)}. Bitte den Strichcode mit der Sendungsnummer scannen.</span>`;
+      return rerender();
     }
     const existing = store.findStoredByTracking(c.value);
     if (existing && !TEST_APP) {
-      $('#codeinfo').innerHTML = `<span class="error">Schon eingelagert: ${esc(existing.name)} in <b>${esc(existing.slotId)}</b> (seit ${fmtDateTime(existing.inAt)}).</span>`;
-      return code.focus();
+      draft.info = `<span class="error">Dieses Paket ist schon eingelagert: ${esc(existing.name)} in Box <b>${esc(existing.slotId)}</b> (seit ${fmtDateTime(existing.inAt)}).</span>`;
+      return rerender();
     }
     draft.tracking = c.value;
     draft.carrier = c.carrier;
-    // Foto mit mehreren Codes: Leitcode gleich mitnehmen
     const leit = lastScanAll.map(classifyCode).find(x => x.type === 'leitcode');
     if (leit && !draft.leitcode) draft.leitcode = leit.value;
+    draft.info = '';
     feedback();
-    $('#codeinfo').innerHTML = `✓ <b>${esc(c.value)}</b> <span class="muted">${esc(c.carrier)}${draft.leitcode ? ' · Adresse erfasst' : ''}</span>`;
-    // Test-App: dasselbe Paket darf mehrfach eingelagert werden, damit man mit einem Label üben kann
-    if (existing) $('#codeinfo').innerHTML += `<br><span class="muted small">Test-App: liegt schon in ${esc(existing.slotId)}, wird trotzdem noch einmal eingelagert.</span>`;
-    name.focus();
+    rerender();
+  }
+
+  function confirmName() {
+    const v = name.value.trim();
+    const c = classifyCode(v);
+    if (c.type === 'slot') { name.value = draft.name; return chooseSlot(c.value); } // Handscanner im Namensfeld
+    if (!v) { $('#nameinfo').innerHTML = '<span class="error">Bitte den Namen vom Etikett eintippen.</span>'; return name.focus(); }
+    draft.name = v;
+    draft.nameOk = true;
+    name.blur();
+    rerender();
   }
 
   async function chooseSlot(id) {
-    // Test-App: jedes gescannte Fach-Etikett funktioniert sofort, ohne Rückfrage
+    // Test-App: jedes gescannte Box-Etikett funktioniert sofort, ohne Rückfrage
     if (!store.getSlot(id) && TEST_APP) store.addSlot({ id });
     if (!store.getSlot(id)) {
-      if (user.role !== 'admin') return toast(`Lagerplatz ${id} ist noch nicht angelegt. Bitte die Chefin, ihn anzulegen.`, { type: 'error' });
-      if (!(await confirmDialog(`Lagerplatz ${id} gibt es noch nicht. Jetzt anlegen?`, { ok: `${id} anlegen` }))) return;
-      try { store.addSlot({ id }); toast(`Lagerplatz ${id} angelegt.`); }
-      catch (err) { return toast(err.message, { type: 'error' }); }
+      if (user.role !== 'admin') return toast(`Box ${id} ist noch nicht angelegt. Bitte die Chefin, sie anzulegen.`, { type: 'error' });
+      if (!(await confirmDialog(`Box ${id} gibt es noch nicht. Jetzt anlegen?`, { ok: `${id} anlegen` }))) return;
+      try { store.addSlot({ id }); } catch (err) { return toast(err.message, { type: 'error' }); }
     }
     draft.slotId = id;
-    feedback();
-    refreshSlots();
-    $('#save').focus();
+    save();
+  }
+
+  function save() {
+    if (!draft.tracking) return rerender();
+    if (!draft.nameOk) return rerender();
+    try {
+      const p = store.checkIn(user.id, draft, { allowDuplicate: TEST_APP });
+      feedback();
+      toast(`✓ ${p.name} liegt in Box ${p.slotId}`, { action: 'Rückgängig', onAction: () => { store.cancelCheckIn(user.id, p.id); toast('Einlagerung zurückgenommen.', { type: 'info' }); viewEin(); } });
+      resetDraft();
+      viewEin();
+    } catch (err) { toast(err.message, { type: 'error' }); }
   }
 
   bindScanField(code, $('#cam1'), handleCode, 'Sendungsnummer scannen', { want: 'tracking' });
   $('#cam2').onclick = async () => {
-    const v = await scanWithCamera('QR-Code am Lagerplatz scannen', { want: 'slot' });
+    const v = await scanWithCamera('Etikett der Box scannen', { want: 'slot' });
     if (!v) return;
     const c = classifyCode(v);
-    c.type === 'slot' ? chooseSlot(c.value) : toast('Das ist kein Lagerplatz-QR.', { type: 'error' });
+    c.type === 'slot' ? chooseSlot(c.value) : toast('Das ist kein Box-Etikett.', { type: 'error' });
   };
+  slot.addEventListener('change', () => { if (slot.value) chooseSlot(slot.value); });
 
+  name.value = draft.name;
   name.addEventListener('input', () => {
     draft.name = name.value;
-    // Handscanner im Namensfeld? → als Code behandeln
     if (name.value.toUpperCase().startsWith(SLOT_PREFIX)) return;
     $('#names').innerHTML = store.knownNames(name.value).map(n => `<option value="${esc(n)}">`).join('');
     const stored = name.value.trim().length >= 3 ? store.search(name.value).exact : [];
     $('#nameinfo').innerHTML = stored.length
-      ? `Schon im Lager für diesen Namen: ${stored.map(p => `<b>${esc(p.name)}</b> in Box ${esc(p.slotId)}`).join(', ')}`
+      ? `Für diesen Namen liegt schon etwas in Box ${[...new Set(stored.map(p => `<b>${esc(p.slotId)}</b>`))].join(', ')}. Am besten dazulegen.`
       : '';
   });
-  name.addEventListener('keydown', e => {
-    if (e.key !== 'Enter') return;
-    e.preventDefault();
-    const c = classifyCode(name.value);
-    if (c.type === 'slot') { name.value = draft.name; return chooseSlot(c.value); }
-    slot.focus();
-  });
-  // Ein Platz-QR, gescannt während der Fokus auf der Auswahl liegt
-  slot.addEventListener('change', () => { draft.slotId = slot.value; refreshSlots(); });
+  name.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); confirmName(); } });
+  $('#nameok').onclick = confirmName;
 
-  // Scanner tippt in ein beliebiges Feld? Platz-QR global abfangen.
+  $$('[data-edit]').forEach(b => b.onclick = () => {
+    if (b.dataset.edit === '1') Object.assign(draft, { tracking: '', carrier: '', leitcode: '', info: '' });
+    draft.nameOk = false;
+    rerender();
+  });
+  $('#restart')?.addEventListener('click', () => { resetDraft(); rerender(); });
+
+  // Handscanner tippt ein Box-Etikett, während kein Feld aktiv ist
   let buf = '', bufTimer;
-  main.addEventListener('keydown', e => {
+  document.onkeydown = e => {
     if (e.target === code || e.target === name) return;
-    if (e.key === 'Enter' && buf.toUpperCase().startsWith(SLOT_PREFIX)) { e.preventDefault(); chooseSlot(classifyCode(buf).value); buf = ''; return; }
+    if (e.key === 'Enter' && buf.toUpperCase().startsWith(SLOT_PREFIX)) { e.preventDefault(); handleCode(buf); buf = ''; return; }
     if (e.key.length === 1) { buf += e.key; clearTimeout(bufTimer); bufTimer = setTimeout(() => (buf = ''), 300); }
-  });
-
-  $('#f').onsubmit = async e => {
+  };
+  $('#f').onsubmit = e => {
     e.preventDefault();
-    if (code.value.trim()) return handleCode(code.value.trim());
-    draft.name = name.value.trim();
-    draft.slotId = slot.value;
-    if (!draft.tracking) { toast('Bitte zuerst die Sendungsnummer scannen.', { type: 'error' }); return code.focus(); }
-    if (!draft.name) { toast('Bitte den Namen eingeben.', { type: 'error' }); return name.focus(); }
-    if (!draft.slotId) { toast('Bitte die Box scannen.', { type: 'error' }); return; }
-    try {
-      const p = store.checkIn(user.id, draft, { allowDuplicate: TEST_APP });
-      toast(`Eingelagert: ${p.name} → ${p.slotId}`, { action: 'Rückgängig', onAction: () => { store.cancelCheckIn(user.id, p.id); viewEin(); } });
-      resetDraft();
-      viewEin();
-    } catch (err) { toast(err.message, { type: 'error' }); }
+    if (step === 1 && code.value.trim()) handleCode(code.value.trim());
+    if (step === 2) confirmName();
   };
 
-  // Zustand wiederherstellen (nach Re-Render)
-  name.value = draft.name;
-  if (draft.tracking) $('#codeinfo').innerHTML = `✓ <b>${esc(draft.tracking)}</b>`;
-  refreshSlots();
   renderRecent();
-  (draft.tracking && !draft.name ? name : code).focus();
+  if (step === 1) code.focus();      // Tastatur bleibt auf dem Handy zu (Handscanner kann tippen)
+  if (step === 2) name.focus();      // hier soll die Tastatur kommen
+  $('.step.active')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
 function renderRecent() {
@@ -489,12 +537,10 @@ function renderRecent() {
 function viewAus() {
   main.innerHTML = `
     <section class="card">
-      <h2>Paket ausgeben</h2>
-      <div class="scanrow">
-        <input id="q" placeholder="Karte/App scannen, Sendungsnummer oder Name" autofocus autocomplete="off">
-        <button type="button" class="btn icon" id="cam" title="Mit Kamera scannen" aria-label="Mit Kamera scannen">${icon('scan')}</button>
-      </div>
-      <p class="muted small">${TEST_APP ? 'Probier mal „abr“, „cali“ oder „don“.' : 'Tipp: Name tippen genügt, z. B. „schm“ oder „müller j“.'} Ausweis prüfen nicht vergessen.</p>
+      <button type="button" class="btn primary big" id="cam">${icon('scan')}Code des Kunden scannen</button>
+      <div class="or"><span>oder Namen suchen</span></div>
+      <input id="q" type="search" placeholder="Name oder Sendungsnummer" autocomplete="off" enterkeyhint="search" spellcheck="false" aria-label="Name oder Sendungsnummer suchen">
+      <p class="hint">${TEST_APP ? 'Probier mal „abr“, „cali“ oder „don“.' : 'Die ersten Buchstaben genügen, z. B. „schm“.'}</p>
     </section>
     <div id="results"></div>`;
   const q = $('#q');
@@ -507,8 +553,7 @@ function viewAus() {
     if (fromScan) { q.value = raw; q.select(); feedback(); } // nächster Scan überschreibt
   };
   q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => run(q.value), 150); });
-  bindScanField(q, $('#cam'), v => run(v, true), 'Karte oder App-Code scannen', { want: 'tracking', leitcodeAfterMs: 2500 });
-  q.focus();
+  bindScanField(q, $('#cam'), v => run(v, true), 'Code des Kunden scannen', { want: 'tracking', leitcodeAfterMs: 2500 });
 }
 
 function parcelCard(p, { actions = true } = {}) {
@@ -516,7 +561,7 @@ function parcelCard(p, { actions = true } = {}) {
   const overdue = store.dueDate(p) < new Date();
   return `
     <article class="parcel ${overdue ? 'overdue' : ''}" data-id="${p.id}">
-      <div class="where"><span class="label">Platz</span><span class="slot-big">${esc(p.slotId)}</span><span class="muted small">${esc(store.getSlot(p.slotId)?.label ?? '')}</span></div>
+      <div class="where"><span class="label">Box</span><span class="slot-big">${esc(p.slotId)}</span><span class="muted small">${esc(store.getSlot(p.slotId)?.label ?? '')}</span></div>
       <div class="what">
         <div class="pname">${esc(p.name)}</div>
         <div class="muted small">${esc(shortTracking(p.tracking))} · seit ${fmtDate(p.inAt)} (${days} ${days === 1 ? 'Tag' : 'Tage'})</div>
@@ -549,8 +594,9 @@ function showResults({ exact, related }, query) {
   }
   box.innerHTML = `
     <section class="card">
-      <div class="row-between"><h2>${exact.length} Treffer</h2>
+      <div class="row-between"><h2>${exact.length === 1 ? '1 Paket' : exact.length + ' Pakete'}</h2>
         ${exact.length > 1 ? `<button class="btn outline" id="allout">Alle ${exact.length} ausgeben</button>` : ''}</div>
+      <p class="hint">Vor der Ausgabe den Ausweis prüfen.</p>
       ${exact.map(p => parcelCard(p)).join('')}
       ${related.length ? `<h3>Gleiche Adresse – vielleicht gleich mitnehmen?</h3>${related.map(p => parcelCard(p)).join('')}` : ''}
     </section>`;
@@ -560,7 +606,7 @@ function showResults({ exact, related }, query) {
 
 function doOut(ids, query) {
   ids.forEach(id => store.checkOut(user.id, id));
-  toast(`${ids.length === 1 ? 'Paket' : ids.length + ' Pakete'} ausgegeben.`, {
+  toast(`✓ ${ids.length === 1 ? 'Paket' : ids.length + ' Pakete'} ausgegeben`, {
     action: 'Rückgängig',
     onAction: () => { ids.forEach(id => store.undoCheckOut(user.id, id)); viewAus(); },
   });
@@ -591,7 +637,7 @@ function viewBestand() {
     const slotOpts = store.listSlots().map(s => `<option value="${esc(s.id)}">${esc(s.id)}</option>`).join('');
     $('#tbl').innerHTML = rows.length ? `
       <div class="table-wrap"><table>
-        <thead><tr><th>Platz</th><th>Name</th><th>Sendung</th><th>Seit</th><th>Frist</th><th></th></tr></thead>
+        <thead><tr><th>Box</th><th>Name</th><th>Sendung</th><th>Seit</th><th>Frist</th><th></th></tr></thead>
         <tbody>${rows.map(p => {
           const due = store.dueDate(p);
           return `<tr class="${due < now ? 'overdue' : ''}">
@@ -601,7 +647,7 @@ function viewBestand() {
             <td><button class="btn small" data-ret="${p.id}">Retoure</button></td></tr>`;
         }).join('')}</tbody></table></div>
       <p class="muted small">${rows.length} Pakete</p>` : '<p class="muted">Keine Pakete.</p>';
-    $$('[data-move]').forEach(s => s.onchange = () => { store.moveParcel(user.id, s.dataset.move, s.value); toast(`Umgelagert nach ${s.value}`); });
+    $$('[data-move]').forEach(s => s.onchange = () => { store.moveParcel(user.id, s.dataset.move, s.value); toast(`Umgelagert in Box ${s.value}`); });
     $$('[data-ret]').forEach(b => b.onclick = () => {
       const id = b.dataset.ret;
       store.checkOut(user.id, id, 'retoure');
@@ -614,7 +660,7 @@ function viewBestand() {
   $('#print').onclick = () => {
     const rows = store.storedParcels().filter(p => store.dueDate(p) < now).sort((a, b) => a.slotId.localeCompare(b.slotId, 'de', { numeric: true }));
     printHtml(`<h1>Rücksendeliste ${now.toLocaleDateString('de-DE')}</h1>
-      <table class="print-table"><thead><tr><th>☐</th><th>Platz</th><th>Name</th><th>Sendungsnummer</th><th>Eingelagert</th></tr></thead>
+      <table class="print-table"><thead><tr><th>☐</th><th>Box</th><th>Name</th><th>Sendungsnummer</th><th>Eingelagert</th></tr></thead>
       <tbody>${rows.map(p => `<tr><td>☐</td><td><b>${esc(p.slotId)}</b></td><td>${esc(p.name)}</td><td>${esc(p.tracking)}</td><td>${fmtDate(p.inAt)}</td></tr>`).join('') || '<tr><td colspan="5">Keine Pakete mit abgelaufener Frist.</td></tr>'}</tbody></table>`);
   };
   draw();
@@ -686,7 +732,7 @@ function viewPlaetze() {
   const slots = store.listSlots(true);
   main.innerHTML = `
     <section class="card">
-      <div class="row-between"><h2>Alle Plätze</h2><button class="btn outline" id="printqr">${icon('drucken')}QR-Etiketten</button></div>
+      <div class="row-between"><h2>Alle Boxen</h2><button class="btn outline" id="printqr">${icon('drucken')}QR-Etiketten</button></div>
       <div class="table-wrap"><table>
         <thead><tr><th><input type="checkbox" id="all" checked aria-label="Alle"></th><th>Code</th><th>Bezeichnung</th><th>Pakete</th><th>Aktiv</th></tr></thead>
         <tbody>${slots.map(s => `<tr data-id="${esc(s.id)}" class="${s.active ? '' : 'inactive'}">
@@ -698,13 +744,13 @@ function viewPlaetze() {
       </table></div>
     </section>
     <div class="grid2">
-      <section class="card"><h2>Einzelnen Platz anlegen</h2>
+      <section class="card"><h2>Eine Box anlegen</h2>
         <form id="one" class="stack">
           <label>Code<input name="id" required placeholder="z. B. A3" maxlength="12"></label>
           <label>Bezeichnung<input name="label" placeholder="z. B. Regal A, Box 3"></label>
           <button class="btn primary">Anlegen</button>
         </form></section>
-      <section class="card"><h2>Viele auf einmal</h2>
+      <section class="card"><h2>Ein ganzes Regal anlegen</h2>
         <form id="many" class="stack">
           <label>Regal<input name="prefix" required value="C" maxlength="6"></label>
           <div class="row"><label>Box von<input name="from" type="number" value="1" min="1"></label><label>bis<input name="to" type="number" value="4" min="1"></label></div>
@@ -717,7 +763,7 @@ function viewPlaetze() {
     const f = inp.dataset.f;
     if (f === 'active' && !inp.checked && store.slotCount(id) > 0) {
       inp.checked = true;
-      return toast('Auf diesem Platz liegen noch Pakete.', { type: 'error' });
+      return toast('In dieser Box liegen noch Pakete.', { type: 'error' });
     }
     store.updateSlot(id, { [f]: f === 'active' ? inp.checked : inp.value });
     toast('Gespeichert.');
@@ -726,7 +772,7 @@ function viewPlaetze() {
   $('#all').onchange = e => $$('.sel').forEach(c => (c.checked = e.target.checked));
   $('#one').onsubmit = e => {
     e.preventDefault();
-    try { store.addSlot(Object.fromEntries(new FormData(e.target))); viewPlaetze(); toast('Platz angelegt.'); }
+    try { store.addSlot(Object.fromEntries(new FormData(e.target))); viewPlaetze(); toast('Box angelegt.'); }
     catch (err) { toast(err.message, { type: 'error' }); }
   };
   $('#many').onsubmit = e => {
@@ -739,12 +785,12 @@ function viewPlaetze() {
     for (let i = a; i <= b; i++) {
       try { store.addSlot({ id: `${r}${i}`, label: `Regal ${r}, Box ${i}` }); n++; } catch { /* existiert */ }
     }
-    toast(`${n} Plätze angelegt.`);
+    toast(`${n} Boxen angelegt.`);
     viewPlaetze();
   };
   $('#printqr').onclick = () => {
     const ids = $$('tr[data-id]').filter(tr => $('.sel', tr).checked).map(tr => tr.dataset.id);
-    if (!ids.length) return toast('Bitte Plätze auswählen.', { type: 'error' });
+    if (!ids.length) return toast('Bitte Boxen auswählen.', { type: 'error' });
     printHtml(`<div class="labels">${ids.map(id => {
       const s = store.getSlot(id);
       return `<div class="qr-label">${qrSvg(SLOT_PREFIX + id)}<div><div class="qr-id">${esc(id)}</div><div class="qr-sub">${esc(s.label)}</div></div></div>`;

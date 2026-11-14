@@ -104,7 +104,7 @@ export function scanWithCamera(title = 'Code scannen', { want, leitcodeAfterMs }
     overlay.className = 'scan-overlay';
     overlay.innerHTML = `
       <div class="scan-box" role="dialog" aria-modal="true">
-        <div class="scan-head"><strong></strong><button type="button" class="btn ghost small" data-close>Abbrechen</button></div>
+        <div class="scan-head"><strong></strong><span class="scan-actions"><button type="button" class="btn ghost small" data-torch hidden aria-pressed="false">Licht</button><button type="button" class="btn ghost small" data-close>Abbrechen</button></span></div>
         <div class="scan-video"><video playsinline muted></video><div class="scan-frame"></div></div>
         <p class="scan-msg muted">Code in den Rahmen halten …</p>
         <label class="btn primary scan-photo" hidden>Foto vom Code aufnehmen<input type="file" accept="image/*" capture="environment" hidden></label>
@@ -142,14 +142,26 @@ export function scanWithCamera(title = 'Code scannen', { want, leitcodeAfterMs }
       }
       let text = '';
       if (want === 'tracking' && types.includes('leitcode')) text = 'Adresse erkannt ✓ Jetzt den Code mit der Sendungsnummer (JJD… oder 00340…) in den Rahmen halten.';
-      else if (want === 'tracking' && types.includes('slot')) text = 'Das ist ein Lagerplatz. Bitte den Code mit der Sendungsnummer scannen.';
-      else if (want === 'slot') text = 'Das ist kein Lagerplatz-QR. Bitte den QR-Code am Fach scannen.';
+      else if (want === 'tracking' && types.includes('slot')) text = 'Das ist ein Box-Etikett. Bitte den Code mit der Sendungsnummer scannen.';
+      else if (want === 'slot') text = 'Das ist kein Box-Etikett. Bitte den QR-Code an der Box scannen.';
       else text = 'Code nicht erkannt. Bitte den Code mit der Sendungsnummer scannen.';
       if (text !== hinted) { hinted = text; msg.textContent = text; msg.classList.add('scan-hint'); try { navigator.vibrate?.(30); } catch { /* egal */ } }
     }
     const onKey = e => { if (e.key === 'Escape') finish(null); };
     document.addEventListener('keydown', onKey);
     overlay.querySelector('[data-close]').onclick = () => finish(null);
+
+    // Taschenlampe, wenn das Handy sie anbietet (hilft im dunklen Regal)
+    function offerTorch() {
+      const track = stream?.getVideoTracks?.()[0];
+      if (!track?.getCapabilities?.().torch) return;
+      const btn = overlay.querySelector('[data-torch]');
+      btn.hidden = false;
+      btn.onclick = async () => {
+        const on = btn.getAttribute('aria-pressed') !== 'true';
+        try { await track.applyConstraints({ advanced: [{ torch: on }] }); btn.setAttribute('aria-pressed', String(on)); } catch { btn.hidden = true; }
+      };
+    }
 
     function photoMode(text) {
       overlay.querySelector('.scan-video').hidden = true;
@@ -175,6 +187,7 @@ export function scanWithCamera(title = 'Code scannen', { want, leitcodeAfterMs }
           if (stopped) return finish(null);
           video.srcObject = stream;
           await video.play();
+          offerTorch();
           const detector = new window.BarcodeDetector({ formats: native });
           const tick = async () => {
             if (stopped) return;
@@ -193,6 +206,7 @@ export function scanWithCamera(title = 'Code scannen', { want, leitcodeAfterMs }
           if (stopped) return finish(null);
           video.srcObject = stream;
           await video.play();
+          offerTorch();
           // Eigene Schleife: pro Kamerabild alle Codes suchen (nicht nur den ersten)
           const canvas = document.createElement('canvas');
           let frame = 0;

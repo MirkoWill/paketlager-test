@@ -105,7 +105,7 @@ export function barChart(items, { label, value, ariaLabel }) {
 
 /** CSV für Excel (Semikolon, UTF-8 mit BOM). */
 export function parcelsCsv() {
-  const head = ['Sendungsnummer', 'Name', 'Platz', 'Status', 'Eingelagert', 'Eingelagert von', 'Abgeschlossen', 'Abgeschlossen von', 'Liegetage'];
+  const head = ['Sendungsnummer', 'Name', 'Box', 'Status', 'Eingelagert', 'Eingelagert von', 'Abgeschlossen', 'Abgeschlossen von', 'Liegetage'];
   const rows = store.allParcels().map(p => [
     p.tracking, p.name, p.slotId, p.status,
     new Date(p.inAt).toLocaleString('de-DE'), store.userName(p.inBy),
