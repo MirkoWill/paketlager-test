@@ -1,6 +1,6 @@
-# Paketlager – Test-App
+# RegalLotse – Test-App
 
-Test- und Vorführversion der Lagerplatz-App **Paketlager** von Willbrandt und Kompagnon.
+Test- und Vorführversion der Lagerplatz-App **RegalLotse** von Willbrandt und Kompagnon.
 
 **Öffnen:** https://mirkowill.github.io/paketlager-test/
 

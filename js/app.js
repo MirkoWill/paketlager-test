@@ -1,4 +1,4 @@
-// Oberfläche der Paketlager-App.
+// Oberfläche von RegalLotse.
 import * as store from './store.js';
 import { classifyCode, SLOT_PREFIX } from './barcode.js';
 import { scanWithCamera, feedback, lastScanAll } from './scanner.js';
@@ -6,7 +6,7 @@ import { computeStats, dayChart, barChart, parcelsCsv } from './report.js';
 import { icon } from './icons.js';
 
 const BRAND = 'Willbrandt und Kompagnon';
-const APP_VERSION = '9';
+const APP_VERSION = '10';
 const AUTO_LOGOUT_MIN = 20;
 // Test-App: wird von der Vorführseite gesetzt (window.PAKETLAGER_TEST = true)
 const TEST_APP = window.PAKETLAGER_TEST === true;
@@ -155,19 +155,25 @@ document.documentElement.classList.toggle('big-text', bigText);
 function renderHeader(route) {
   const f = store.getFiliale();
   $('#header').innerHTML = `
-    <div class="wordmark"><span class="wm-light">Willbrandt</span> <span class="wm-bold">und Kompagnon</span></div>
     <div class="hero">
       <div class="hero-inner">
         <div class="hero-top">
-          <span class="eyebrow">${esc(f.name || 'Paketlager')}</span>
+          <a class="brand" href="#ein" aria-label="RegalLotse von Willbrandt und Kompagnon">
+            <span class="brand-name">RegalLotse</span>
+            <span class="brand-by"><span class="brand-by-text"><span class="wm-light">Willbrandt</span> <span class="wm-bold">und Kompagnon</span></span></span>
+          </a>
           <div class="hero-actions">
             <button class="pill" id="aplus" aria-pressed="${bigText}" title="Größere Schrift">A+</button>
             ${user ? `<a class="pill" href="#mehr" title="Angemeldet als ${esc(user.name)}">${esc(initials(user.name))}</a>` : ''}
           </div>
         </div>
-        <h1 class="hero-title">${esc(TITLES[route] ?? 'Paketlager')}</h1>
+        <div class="hero-page">
+          <h1 class="hero-title">${esc(TITLES[route] ?? 'RegalLotse')}</h1>
+          <span class="eyebrow">${esc(f.name || '')}</span>
+        </div>
       </div>
     </div>`;
+  fitBrand();
   const activeTab = ['plaetze', 'team', 'einstellungen'].includes(route) ? 'mehr' : route;
   $('#nav').innerHTML = user
     ? TABS.filter(n => !n.admin || user.role === 'admin').map(n =>
@@ -179,9 +185,24 @@ function renderHeader(route) {
     document.documentElement.classList.toggle('big-text', bigText);
     $('#aplus').setAttribute('aria-pressed', bigText);
     try { localStorage.setItem('paketlager.bigtext', bigText ? '1' : '0'); } catch { /* egal */ }
+    fitBrand();
   };
-  document.title = `${TITLES[route] ?? ''} · Paketlager`;
+  document.title = `${TITLES[route] ?? ''} · RegalLotse`;
 }
+
+/** „Willbrandt und Kompagnon“ genau so breit wie „RegalLotse“ (links und rechts bündig). */
+function fitBrand() {
+  const name = $('.brand-name'), text = $('.brand-by-text');
+  if (!name || !text) return;
+  text.style.letterSpacing = '0px';
+  text.style.marginRight = '0px';
+  const chars = text.textContent.length - 1;
+  const ls = (name.getBoundingClientRect().width - text.getBoundingClientRect().width) / chars;
+  text.style.letterSpacing = `${ls}px`;
+  text.style.marginRight = `${-ls}px`; // Abstand nach dem letzten Buchstaben ausgleichen
+}
+document.fonts?.ready.then(fitBrand);
+window.addEventListener('resize', fitBrand);
 
 const initials = n => n.split(/\s+/).filter(Boolean).map(w => w[0]).slice(0, 2).join('').toUpperCase();
 

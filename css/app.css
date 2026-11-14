@@ -1,4 +1,4 @@
-/* Paketlager – Willbrandt und Kompagnon
+/* RegalLotse – Willbrandt und Kompagnon
    Gestaltung angelehnt an app.willbrandt-kompagnon.de
    Markenfarben zentral in :root. Ein Foto im Kopfband: --hero-image setzen,
    z. B. --hero-image: url("../img/haus.jpg"); */
@@ -16,7 +16,7 @@
   --olive-tint: #eef0e6;
   --lime: #e3edb3;
   --hero-bg: #3d434a;
-  --hero-image: none;
+  --hero-image: url("../img/header.jpg");
   --bg: #f6f6f3;
   --surface: #ffffff;
   --ink: #1f2133;
@@ -78,31 +78,34 @@ code { background: var(--olive-tint); padding: 0 .3em; border-radius: 4px; }
 .error { color: var(--error); }
 .ic { width: 1.35em; height: 1.35em; flex: none; }
 
-/* ---------- Kopf: Wortmarke + Kopfband ---------- */
-.wordmark {
-  font-family: var(--condensed); color: var(--olive); font-size: 2rem; line-height: 1;
-  padding: calc(1.3rem + env(safe-area-inset-top)) 16px 1.6rem; letter-spacing: -.01em;
-}
-.wm-light { font-weight: 300; }
-.wm-bold { font-weight: 600; }
+/* ---------- Kopf: RegalLotse + Willbrandt und Kompagnon auf Regal-Foto ---------- */
 .hero {
   position: relative; color: #fff;
-  background: linear-gradient(rgba(52, 58, 64, .78), rgba(52, 58, 64, .86)), var(--hero-image), linear-gradient(160deg, #4b5259, var(--hero-bg));
-  background-size: cover; background-position: center;
-  clip-path: polygon(0 26%, 100% 0, 100% 100%, 0 100%);
-  margin-top: -1.2rem; padding: 4.2rem 16px 1.6rem;
+  background:
+    linear-gradient(100deg, rgba(38, 43, 48, .92) 0%, rgba(38, 43, 48, .80) 45%, rgba(38, 43, 48, .62) 100%),
+    var(--hero-image) center 35% / cover no-repeat,
+    linear-gradient(160deg, #4b5259, var(--hero-bg));
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 0 calc(100% - 14px));
+  padding: calc(.75rem + env(safe-area-inset-top)) 16px 1.35rem;
 }
 .hero-inner, .main, .tabbar-inner { max-width: 980px; margin: 0 auto; }
 .hero-top { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-.eyebrow { font-weight: 700; letter-spacing: .16em; text-transform: uppercase; font-size: .95rem; color: #eceee6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hero-actions { display: flex; gap: .6rem; flex: none; }
+.brand { display: inline-flex; flex-direction: column; text-decoration: none; line-height: 1; }
+.brand-name { font-family: var(--serif); font-size: 2rem; color: var(--lime); letter-spacing: .005em; line-height: 1; }
+.brand-by { display: block; margin-top: .3rem; font-family: var(--condensed); font-size: .78rem; color: #cfd6ad; white-space: nowrap; line-height: 1; }
+.brand-by-text { display: inline-block; }
+.wm-light { font-weight: 300; }
+.wm-bold { font-weight: 600; }
+.hero-actions { display: flex; gap: .5rem; flex: none; }
 .pill {
-  display: inline-grid; place-items: center; min-width: 54px; height: 54px; padding: 0 .9rem; border-radius: 999px;
-  border: 1.5px solid rgba(227, 237, 179, .55); background: transparent; color: var(--lime);
-  font: 700 1rem var(--sans); text-decoration: none; cursor: pointer;
+  display: inline-grid; place-items: center; min-width: 44px; height: 44px; padding: 0 .75rem; border-radius: 999px;
+  border: 1.5px solid rgba(227, 237, 179, .55); background: rgba(38, 43, 48, .35); color: var(--lime);
+  font: 700 .95rem var(--sans); text-decoration: none; cursor: pointer;
 }
 .pill[aria-pressed="true"] { background: var(--lime); color: var(--hero-bg); }
-.hero-title { font-size: clamp(2.6rem, 9vw, 3.4rem); line-height: 1.05; margin: .5rem 0 0; color: var(--lime); }
+.hero-page { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-top: .85rem; }
+.hero-title { font-size: 1.7rem; line-height: 1.1; margin: 0; color: #fff; }
+.eyebrow { font-weight: 700; letter-spacing: .14em; text-transform: uppercase; font-size: .72rem; color: #dfe3d2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
 /* ---------- Tab-Leiste unten ---------- */
 .nav:empty { display: none; }
