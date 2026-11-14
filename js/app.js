@@ -6,7 +6,7 @@ import { computeStats, dayChart, barChart, parcelsCsv } from './report.js';
 import { icon } from './icons.js';
 
 const BRAND = 'Willbrandt und Kompagnon';
-const APP_VERSION = '7';
+const APP_VERSION = '8';
 const AUTO_LOGOUT_MIN = 20;
 // Test-App: wird von der Vorführseite gesetzt (window.PAKETLAGER_TEST = true)
 const TEST_APP = window.PAKETLAGER_TEST === true;
@@ -96,7 +96,25 @@ function qrSvg(text) {
 }
 
 /** Feld mit Kamera-Knopf. Ruft onCode(raw) bei Enter oder Kamera-Treffer. */
+// Touch-Geräte: Scan-Felder öffnen die Bildschirmtastatur erst, wenn man hineintippt.
+// Ein Bluetooth-Handscanner kann trotzdem jederzeit hineinschreiben.
+const TOUCH = window.matchMedia?.('(pointer: coarse)').matches ?? false;
+function quietKeyboard(input) {
+  if (!TOUCH) return;
+  input.setAttribute('inputmode', 'none');
+  input.addEventListener('pointerup', () => {
+    if (input.getAttribute('inputmode') !== 'none') return;
+    input.setAttribute('inputmode', 'text');
+    input.blur();
+    setTimeout(() => input.focus(), 0);
+  });
+  input.addEventListener('blur', () => setTimeout(() => {
+    if (document.activeElement !== input) input.setAttribute('inputmode', 'none');
+  }, 0));
+}
+
 function bindScanField(input, cameraBtn, onCode, title, scanOpts = {}) {
+  quietKeyboard(input);
   input.addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); const v = input.value.trim(); if (v) onCode(v); }
   });
