@@ -392,8 +392,10 @@ function viewEin() {
   }
 
   async function chooseSlot(id) {
+    // Test-App: jedes gescannte Fach-Etikett funktioniert sofort, ohne Rückfrage
+    if (!store.getSlot(id) && TEST_APP) store.addSlot({ id, label: '', capacity: 8 });
     if (!store.getSlot(id)) {
-      if (!(TEST_APP || user.role === 'admin')) return toast(`Lagerplatz ${id} ist noch nicht angelegt. Bitte die Chefin, ihn anzulegen.`, { type: 'error' });
+      if (user.role !== 'admin') return toast(`Lagerplatz ${id} ist noch nicht angelegt. Bitte die Chefin, ihn anzulegen.`, { type: 'error' });
       if (!(await confirmDialog(`Lagerplatz ${id} gibt es noch nicht. Jetzt anlegen?`, { ok: `${id} anlegen` }))) return;
       try { store.addSlot({ id, label: '', capacity: 8 }); toast(`Lagerplatz ${id} angelegt.`); }
       catch (err) { return toast(err.message, { type: 'error' }); }
@@ -826,6 +828,8 @@ function viewEinstellungen() {
 // ---------------- Start ----------------
 
 if (TEST_APP && !store.isSetUp()) await store.setupTestApp();
+// Test-App: Lagerplatz A3 gibt es immer (auch bei älteren Testdaten auf dem Gerät)
+if (TEST_APP && !store.getSlot('A3')) store.addSlot({ id: 'A3', label: 'Regal A, Fach 3', capacity: 10 });
 store.anonymizeOld();
 render();
 if ('serviceWorker' in navigator && location.protocol !== 'file:' && !inViewer()) {
