@@ -303,3 +303,4 @@ details summary { cursor: pointer; color: var(--olive); font-weight: 600; paddin
 
 /* Test-App-Hinweis */
 .test-hint { background: var(--olive-tint); color: var(--ink); border-radius: var(--radius-sm); padding: .7rem .9rem; margin: 0 0 1rem; }
+.scan-msg.scan-hint { color: var(--ink); font-weight: 600; }

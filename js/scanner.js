@@ -47,20 +47,27 @@ async function decodeImage(file) {
       if (codes.length) return codes.map(c => c.rawValue);
     } catch { /* weiter mit ZXing */ }
   }
-  // ZXing findet pro Durchgang einen Code: gefundenen Code übermalen und erneut suchen.
   await loadZxing();
-  const ZX = window.ZXing;
   const img = await createImageBitmap(file);
   const scale = Math.min(1, 2000 / Math.max(img.width, img.height));
   const canvas = document.createElement('canvas');
   canvas.width = Math.round(img.width * scale);
   canvas.height = Math.round(img.height * scale);
+  canvas.getContext('2d', { willReadFrequently: true }).drawImage(img, 0, 0, canvas.width, canvas.height);
+  return zxingMulti(canvas);
+}
+
+/**
+ * ZXing findet pro Durchgang nur einen Code: gefundenen Code übermalen und erneut suchen.
+ * So kommen Leitcode UND Sendungsnummer aus einem Bild.
+ */
+function zxingMulti(canvas, rounds = 4) {
+  const ZX = window.ZXing;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
   const reader = new ZX.MultiFormatReader();
   reader.setHints(new Map([[ZX.DecodeHintType.TRY_HARDER, true]]));
   const found = [];
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < rounds; i++) {
     let result;
     try {
       const lum = new ZX.HTMLCanvasElementLuminanceSource(canvas);
@@ -87,8 +94,10 @@ export let lastScanAll = [];
 /**
  * Öffnet die Kamera als Overlay und liefert den ersten erkannten Code (oder null bei Abbruch).
  * @param {string} title Hinweis oben im Overlay
+ * @param {{want?: 'tracking'|'slot'}} opts Gesuchte Code-Art: Die Live-Kamera scannt weiter,
+ *   bis so ein Code im Bild ist (z. B. Leitcode merken, aber auf die Sendungsnummer warten).
  */
-export function scanWithCamera(title = 'Code scannen') {
+export function scanWithCamera(title = 'Code scannen', { want } = {}) {
   lastScanAll = [];
   return new Promise(resolve => {
     const overlay = document.createElement('div');
@@ -105,18 +114,33 @@ export function scanWithCamera(title = 'Code scannen') {
     const video = overlay.querySelector('video');
     const msg = overlay.querySelector('.scan-msg');
     const photoBtn = overlay.querySelector('.scan-photo');
-    let stream = null, stopped = false, zxReader = null, raf = 0;
+    let stream = null, stopped = false, zxTimer = 0, raf = 0;
 
     function finish(value) {
       if (stopped) return;
       stopped = true;
       cancelAnimationFrame(raf);
-      try { zxReader?.reset(); } catch { /* egal */ }
+      clearTimeout(zxTimer);
       stream?.getTracks().forEach(t => t.stop());
       overlay.remove();
       document.removeEventListener('keydown', onKey);
       if (value) feedback();
       resolve(value || null);
+    }
+    let hinted = '';
+    /** Neue Live-Treffer prüfen: fertig, sobald die gesuchte Code-Art dabei ist. */
+    function consider(values) {
+      for (const v of values) if (!lastScanAll.includes(v)) lastScanAll.push(v);
+      if (!want) return finish(pickBest(lastScanAll));
+      const hit = lastScanAll.find(v => classifyCode(v).type === want);
+      if (hit) return finish(hit);
+      const types = lastScanAll.map(v => classifyCode(v).type);
+      let text = '';
+      if (want === 'tracking' && types.includes('leitcode')) text = 'Adresse erkannt ✓ Jetzt den Code mit der Sendungsnummer (JJD… oder 00340…) in den Rahmen halten.';
+      else if (want === 'tracking' && types.includes('slot')) text = 'Das ist ein Lagerplatz. Bitte den Code mit der Sendungsnummer scannen.';
+      else if (want === 'slot') text = 'Das ist kein Lagerplatz-QR. Bitte den QR-Code am Fach scannen.';
+      else text = 'Code nicht erkannt. Bitte den Code mit der Sendungsnummer scannen.';
+      if (text !== hinted) { hinted = text; msg.textContent = text; msg.classList.add('scan-hint'); try { navigator.vibrate?.(30); } catch { /* egal */ } }
     }
     const onKey = e => { if (e.key === 'Escape') finish(null); };
     document.addEventListener('keydown', onKey);
@@ -151,7 +175,8 @@ export function scanWithCamera(title = 'Code scannen') {
             if (stopped) return;
             try {
               const codes = await detector.detect(video);
-              if (codes.length) { lastScanAll = codes.map(c => c.rawValue); return finish(pickBest(lastScanAll)); }
+              if (codes.length) consider(codes.map(c => c.rawValue));
+              if (stopped) return;
             } catch { /* nächster Versuch */ }
             raf = requestAnimationFrame(tick);
           };
@@ -159,12 +184,31 @@ export function scanWithCamera(title = 'Code scannen') {
         } else {
           await loadZxing();
           if (stopped) return;
-          zxReader = new window.ZXing.BrowserMultiFormatReader();
-          await zxReader.decodeFromConstraints(
-            { video: { facingMode: 'environment' }, audio: false },
-            video,
-            (result) => { if (result) finish(result.getText()); },
-          );
+          stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1920 } }, audio: false });
+          if (stopped) return finish(null);
+          video.srcObject = stream;
+          await video.play();
+          // Eigene Schleife: pro Kamerabild alle Codes suchen (nicht nur den ersten)
+          const canvas = document.createElement('canvas');
+          let frame = 0;
+          const loop = () => {
+            if (stopped) return;
+            if (video.videoWidth) {
+              const vw = video.videoWidth, vh = video.videoHeight;
+              // abwechselnd: ganzes Bild und der Bereich im Zielrahmen in voller Auflösung
+              const crop = frame++ % 2 === 1;
+              const sx = crop ? vw * 0.08 : 0, sy = crop ? vh * 0.2 : 0;
+              const sw = crop ? vw * 0.84 : vw, sh = crop ? vh * 0.6 : vh;
+              const scale = Math.min(1, 1800 / Math.max(sw, sh));
+              canvas.width = Math.round(sw * scale);
+              canvas.height = Math.round(sh * scale);
+              canvas.getContext('2d', { willReadFrequently: true }).drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+              const values = zxingMulti(canvas, 4);
+              if (values.length) consider(values);
+            }
+            if (!stopped) zxTimer = setTimeout(loop, 200);
+          };
+          loop();
         }
       } catch (e) {
         if (stopped) return;

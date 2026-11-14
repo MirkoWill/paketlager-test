@@ -95,12 +95,12 @@ function qrSvg(text) {
 }
 
 /** Feld mit Kamera-Knopf. Ruft onCode(raw) bei Enter oder Kamera-Treffer. */
-function bindScanField(input, cameraBtn, onCode, title) {
+function bindScanField(input, cameraBtn, onCode, title, scanOpts = {}) {
   input.addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); const v = input.value.trim(); if (v) onCode(v); }
   });
   cameraBtn?.addEventListener('click', async () => {
-    const v = await scanWithCamera(title);
+    const v = await scanWithCamera(title, scanOpts);
     if (v) onCode(v);
   });
 }
@@ -400,9 +400,9 @@ function viewEin() {
     $('#save').focus();
   }
 
-  bindScanField(code, $('#cam1'), handleCode, 'Sendungsnummer scannen');
+  bindScanField(code, $('#cam1'), handleCode, 'Sendungsnummer scannen', { want: 'tracking' });
   $('#cam2').onclick = async () => {
-    const v = await scanWithCamera('QR-Code am Lagerplatz scannen');
+    const v = await scanWithCamera('QR-Code am Lagerplatz scannen', { want: 'slot' });
     if (!v) return;
     const c = classifyCode(v);
     c.type === 'slot' ? chooseSlot(c.value) : toast('Das ist kein Lagerplatz-QR.', { type: 'error' });
