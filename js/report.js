@@ -45,10 +45,7 @@ export function computeStats(now = new Date()) {
     buckets.find(b => d >= b.min && d <= b.max).n++;
   });
 
-  const slots = store.listSlots().map(s => ({
-    id: s.id, label: s.label, capacity: s.capacity,
-    used: store.slotUsage(s.id), count: store.slotCount(s.id),
-  }));
+  const slots = store.listSlots().map(s => ({ id: s.id, label: s.label, count: store.slotCount(s.id) }));
 
   return {
     bestand: stored.length,
@@ -108,9 +105,9 @@ export function barChart(items, { label, value, ariaLabel }) {
 
 /** CSV für Excel (Semikolon, UTF-8 mit BOM). */
 export function parcelsCsv() {
-  const head = ['Sendungsnummer', 'Name', 'Größe', 'Platz', 'Status', 'Eingelagert', 'Eingelagert von', 'Abgeschlossen', 'Abgeschlossen von', 'Liegetage'];
+  const head = ['Sendungsnummer', 'Name', 'Platz', 'Status', 'Eingelagert', 'Eingelagert von', 'Abgeschlossen', 'Abgeschlossen von', 'Liegetage'];
   const rows = store.allParcels().map(p => [
-    p.tracking, p.name, store.SIZE_LABEL[p.size], p.slotId, p.status,
+    p.tracking, p.name, p.slotId, p.status,
     new Date(p.inAt).toLocaleString('de-DE'), store.userName(p.inBy),
     p.outAt ? new Date(p.outAt).toLocaleString('de-DE') : '', p.outBy ? store.userName(p.outBy) : '',
     store.daysStored(p),

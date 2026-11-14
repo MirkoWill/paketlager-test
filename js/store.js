@@ -5,8 +5,6 @@
 import { trackingKey, normalizeName, nameMatches } from './barcode.js';
 
 const KEY = globalThis.PAKETLAGER_TEST === true ? 'paketlager.test.v1' : 'paketlager.v1';
-export const SIZE_UNITS = { S: 1, M: 2, L: 4 };
-export const SIZE_LABEL = { S: 'Klein', M: 'Mittel', L: 'Groß' };
 
 let state = load();
 
@@ -117,56 +115,21 @@ export const listSlots = (all = false) =>
 
 export const getSlot = id => state.slots.find(s => s.id === id);
 
-export function addSlot({ id, label = '', capacity = 6, letters = '' }) {
+export function addSlot({ id, label = '' }) {
   id = String(id).trim().toUpperCase();
   if (!/^[A-Z0-9\-]{1,12}$/.test(id)) throw new Error('Platz-Code: nur Buchstaben, Ziffern und Bindestrich (max. 12).');
   if (state.slots.some(s => s.id === id)) throw new Error(`Platz ${id} gibt es schon.`);
-  state.slots.push({ id, label: label.trim(), capacity: Math.max(1, +capacity || 1), letters: letters.trim().toUpperCase(), active: true });
+  state.slots.push({ id, label: String(label).trim(), active: true });
   save();
 }
 
 export function updateSlot(id, patch) {
-  const s = getSlot(id);
-  Object.assign(s, patch);
-  if (patch.letters != null) s.letters = patch.letters.trim().toUpperCase();
-  if (patch.capacity != null) s.capacity = Math.max(1, +patch.capacity || 1);
+  Object.assign(getSlot(id), patch);
   save();
-}
-
-export function slotUsage(id) {
-  return state.parcels
-    .filter(p => p.status === 'lagernd' && p.slotId === id)
-    .reduce((sum, p) => sum + SIZE_UNITS[p.size], 0);
 }
 
 export function slotCount(id) {
   return state.parcels.filter(p => p.status === 'lagernd' && p.slotId === id).length;
-}
-
-/** Passt der Buchstabe in "A-C", "D", "SCH"? */
-function lettersMatch(letters, name) {
-  if (!letters) return false;
-  const last = normalizeName(name).split(' ').pop() || '';
-  return letters.split(/[,\s]+/).filter(Boolean).some(part => {
-    const m = /^([A-Z])-([A-Z])$/.exec(part);
-    if (m) { const c = last[0]?.toUpperCase(); return c >= m[1] && c <= m[2]; }
-    return last.toUpperCase().startsWith(part);
-  });
-}
-
-/** Schlägt einen Platz vor: erst passende Buchstaben-Box mit Platz, sonst der vollste, in den es noch passt. */
-export function suggestSlot(name, size) {
-  const need = SIZE_UNITS[size] ?? 1;
-  const candidates = listSlots()
-    .map(s => ({ s, free: s.capacity - slotUsage(s.id) }))
-    .filter(x => x.free >= need);
-  if (!candidates.length) return null;
-  // Reihenfolge: passende Buchstaben-Box → allgemeiner Platz (ohne Buchstaben) → irgendeine Box mit Platz
-  const byLetter = candidates.filter(x => lettersMatch(x.s.letters, name));
-  const general = candidates.filter(x => !x.s.letters);
-  const pool = byLetter.length ? byLetter : general.length ? general : candidates;
-  pool.sort((a, b) => a.free - b.free || a.s.id.localeCompare(b.s.id, 'de', { numeric: true }));
-  return pool[0].s.id;
 }
 
 // ---------- Pakete ----------
@@ -176,14 +139,14 @@ export function findStoredByTracking(value) {
   return state.parcels.find(p => p.status === 'lagernd' && p.trackingKey === key) ?? null;
 }
 
-export function checkIn(userId, { tracking, carrier, leitcode, name, size, slotId, note = '' }, { allowDuplicate = false } = {}) {
+export function checkIn(userId, { tracking, carrier, leitcode, name, slotId, note = '' }, { allowDuplicate = false } = {}) {
   if (!tracking) throw new Error('Sendungsnummer fehlt.');
   if (!name?.trim()) throw new Error('Name fehlt.');
   if (!getSlot(slotId)) throw new Error('Bitte einen gültigen Lagerplatz wählen.');
   if (!allowDuplicate && findStoredByTracking(tracking)) throw new Error('Dieses Paket ist bereits eingelagert.');
   const p = {
     id: uid(), tracking, trackingKey: trackingKey(tracking), carrier: carrier || '', leitcode: leitcode || null,
-    name: name.trim(), nameKey: normalizeName(name), size: size || 'M', slotId, note,
+    name: name.trim(), nameKey: normalizeName(name), slotId, note,
     status: 'lagernd', inAt: new Date().toISOString(), inBy: userId, outAt: null, outBy: null,
   };
   state.parcels.push(p);
@@ -337,6 +300,10 @@ export function resetAll() {
   save();
 }
 
+/** Stand der Testdaten. Erhöhen, damit alle Test-Geräte beim nächsten Öffnen frisch starten. */
+export const TEST_DATA_VERSION = 2;
+export const testDataVersion = () => state.testDataVersion ?? 1;
+
 /** Test-App: Filiale, Team und Testdaten auf einen Schlag. */
 export async function setupTestApp() {
   resetAll();
@@ -344,31 +311,29 @@ export async function setupTestApp() {
   const chefin = await addUser({ name: 'Chefin', pin: '1234', role: 'admin' });
   await addUser({ name: 'Mitarbeiterin', pin: '0000', role: 'staff' });
   seedDemo(chefin);
+  state.testDataVersion = TEST_DATA_VERSION;
+  save();
 }
 
-/** Demo-Daten zum Ausprobieren. */
+/** Demo-Daten zum Ausprobieren: ein Regal mit Boxen A1–A4 und B1–B4. */
 export function seedDemo(userId) {
-  const rows = [['A', 'A–C', 'A-C'], ['B', 'D–G', 'D-G'], ['C', 'H–K', 'H-K'], ['D', 'L–O', 'L-O'], ['E', 'P–S', 'P-S'], ['F', 'T–Z', 'T-Z']];
-  for (const [id, label, letters] of rows) if (!getSlot(id)) addSlot({ id, label: 'Box ' + label, capacity: 8, letters });
-  for (const id of ['REGAL-1', 'REGAL-2']) if (!getSlot(id)) addSlot({ id, label: 'Regal (beliebig)', capacity: 12 });
-  if (!getSlot('BODEN-1')) addSlot({ id: 'BODEN-1', label: 'Boden, große Pakete', capacity: 16 });
-  if (!getSlot('A3')) addSlot({ id: 'A3', label: 'Regal A, Fach 3', capacity: 10 });
+  for (const r of ['A', 'B']) for (let n = 1; n <= 4; n++) {
+    if (!getSlot(r + n)) addSlot({ id: r + n, label: `Regal ${r}, Box ${n}` });
+  }
   // Testkunden: die Abrafaxe. Abrax, Brabax und Califax wohnen zusammen (gleicher Leitcode),
-  // so zeigt die Ausgabe auch „weitere Pakete für diese Adresse“.
+  // so zeigt die Ausgabe auch „gleiche Adresse“.
   const ZUHAUSE = '13051014003571', BURG = '13051088001572';
-  const kunden = [ // Name, Größe, Tage im Lager, Adresse (Leitcode)
-    ['Don Ferrando', 'M', 9.3, BURG], ['Califax', 'M', 8.6, ZUHAUSE], ['Brabax', 'S', 5.2, ZUHAUSE],
-    ['Califax', 'M', 3.4, ZUHAUSE], ['Abrax', 'S', 2.8, ZUHAUSE], ['Don Ferrando', 'L', 2.1, BURG],
-    ['Brabax', 'L', 1.3, ZUHAUSE], ['Califax', 'S', 0.6, ZUHAUSE], ['Abrax', 'M', 0.2, ZUHAUSE],
+  const kunden = [ // Name, Box, Tage im Lager, Adresse (Leitcode)
+    ['Don Ferrando', 'B4', 9.3, BURG], ['Califax', 'A1', 8.6, ZUHAUSE], ['Brabax', 'A2', 5.2, ZUHAUSE],
+    ['Califax', 'B1', 3.4, ZUHAUSE], ['Abrax', 'A1', 2.8, ZUHAUSE], ['Don Ferrando', 'B2', 2.1, BURG],
+    ['Brabax', 'A4', 1.3, ZUHAUSE], ['Califax', 'B3', 0.6, ZUHAUSE], ['Abrax', 'A2', 0.2, ZUHAUSE],
   ];
   const now = Date.now();
-  kunden.forEach(([name, size, tage, leitcode], i) => {
+  kunden.forEach(([name, slotId, tage, leitcode], i) => {
     const tracking = i % 2
       ? '340434' + String(617000000000 + now % 1000000 * 7 + i * 104729).slice(0, 12)
       : 'JJD000390018' + String((now % 100000) * 10 + i).padStart(9, '0');
-    const slotId = suggestSlot(name, size);
-    if (!slotId) return;
-    const p = checkIn(userId, { tracking, carrier: 'DHL', leitcode, name, size, slotId });
+    const p = checkIn(userId, { tracking, carrier: 'DHL', leitcode, name, slotId });
     p.inAt = new Date(now - tage * 86400000).toISOString();
   });
   // Ein paar abgeschlossene für das Reporting
@@ -381,7 +346,7 @@ export function seedDemo(userId) {
       if (outAt > now || outAt < inAt) continue;
       state.parcels.push({
         id: uid(), tracking: '…' + (1000 + d * 10 + k), trackingKey: '', carrier: 'DHL', leitcode: null, name: '(gelöscht)', nameKey: '',
-        size: 'M', slotId: 'A', note: '', status: k === 4 ? 'retoure' : 'ausgegeben', anonymized: true,
+        slotId: 'A1', note: '', status: k === 4 ? 'retoure' : 'ausgegeben', anonymized: true,
         inAt: new Date(inAt).toISOString(), inBy: userId, outAt: new Date(outAt).toISOString(), outBy: userId,
       });
     }

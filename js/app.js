@@ -6,7 +6,7 @@ import { computeStats, dayChart, barChart, parcelsCsv } from './report.js';
 import { icon } from './icons.js';
 
 const BRAND = 'Willbrandt und Kompagnon';
-const APP_VERSION = '8';
+const APP_VERSION = '9';
 const AUTO_LOGOUT_MIN = 20;
 // Test-App: wird von der Vorführseite gesetzt (window.PAKETLAGER_TEST = true)
 const TEST_APP = window.PAKETLAGER_TEST === true;
@@ -298,8 +298,8 @@ function viewLogin() {
 
 // ---------------- Einlagern ----------------
 
-const draft = { tracking: '', carrier: '', leitcode: '', name: '', size: 'M', slotId: '' };
-const resetDraft = () => Object.assign(draft, { tracking: '', carrier: '', leitcode: '', name: '', size: 'M', slotId: '' });
+const draft = { tracking: '', carrier: '', leitcode: '', name: '', slotId: '' };
+const resetDraft = () => Object.assign(draft, { tracking: '', carrier: '', leitcode: '', name: '', slotId: '' });
 
 function viewEin() {
   if (!store.listSlots().length) {
@@ -315,7 +315,7 @@ function viewEin() {
         <div class="field">
           <label for="code">1 · Sendungsnummer scannen</label>
           <div class="scanrow">
-            <input id="code" placeholder="Barcode scannen oder eintippen" autofocus>
+            <input id="code" placeholder="Barcode scannen oder eintippen">
             <button type="button" class="btn icon" id="cam1" title="Mit Kamera scannen" aria-label="Mit Kamera scannen">${icon('scan')}</button>
           </div>
           <div id="codeinfo" class="info"></div>
@@ -327,20 +327,14 @@ function viewEin() {
           <div id="nameinfo" class="info"></div>
         </div>
         <div class="field">
-          <span class="label">3 · Größe</span>
-          <div class="seg" id="size">
-            ${Object.entries(store.SIZE_LABEL).map(([k, v]) => `<button type="button" data-size="${k}">${v}</button>`).join('')}
-          </div>
-        </div>
-        <div class="field">
-          <label for="slot">4 · Lagerplatz <span class="muted">(QR am Platz scannen oder wählen)</span></label>
+          <label for="slot">3 · Box scannen <span class="muted">(Paket in eine Box mit Platz legen, dann deren QR-Code scannen)</span></label>
           <div class="scanrow">
             <select id="slot"></select>
-            <button type="button" class="btn icon" id="cam2" title="Platz-QR mit Kamera scannen" aria-label="Platz-QR mit Kamera scannen">${icon('scan')}</button>
+            <button type="button" class="btn icon" id="cam2" title="Box-QR mit Kamera scannen" aria-label="Box-QR mit Kamera scannen">${icon('scan')}</button>
           </div>
           <div id="slotinfo" class="info"></div>
         </div>
-        <button class="btn primary big" id="save">Einlagern</button>
+        <button class="btn primary big" id="save">${icon('einlagern')}Einlagern</button>
       </form>
     </section>
     <section class="card">
@@ -351,32 +345,9 @@ function viewEin() {
   const code = $('#code'), name = $('#name'), slot = $('#slot');
 
   function refreshSlots() {
-    const suggestion = draft.name ? store.suggestSlot(draft.name, draft.size) : null;
-    const same = draft.name ? sameNameSlot() : null;
-    if (!draft.slotId || draft.autoSlot) {
-      draft.slotId = same ?? suggestion ?? '';
-      draft.autoSlot = true;
-    }
-    slot.innerHTML = '<option value="">– Platz wählen –</option>' + store.listSlots().map(s => {
-      const free = s.capacity - store.slotUsage(s.id);
-      return `<option value="${esc(s.id)}" ${s.id === draft.slotId ? 'selected' : ''}>${esc(s.id)}${s.label ? ' · ' + esc(s.label) : ''} (${free <= 0 ? 'voll' : 'frei ' + free})</option>`;
-    }).join('');
-    const info = [];
-    if (same && draft.slotId === same) info.push(`Vorschlag: <b>${esc(same)}</b>, dort liegt schon ein Paket für diesen Namen.`);
-    else if (suggestion && draft.slotId === suggestion) info.push(`Vorschlag: <b>${esc(suggestion)}</b>`);
-    if (draft.name && !suggestion) info.push('<span class="warn">Kein Platz mit genug freiem Raum. Bitte trotzdem wählen oder Platz anlegen.</span>');
-    $('#slotinfo').innerHTML = info.join(' ');
-  }
-
-  function sameNameSlot() {
-    const hit = store.search(draft.name).exact.find(p => p.nameKey && store.SIZE_UNITS[draft.size] <= store.getSlot(p.slotId).capacity - store.slotUsage(p.slotId));
-    return hit?.slotId ?? null;
-  }
-
-  function setSize(s) {
-    draft.size = s;
-    $$('#size button').forEach(b => b.classList.toggle('on', b.dataset.size === s));
-    refreshSlots();
+    slot.innerHTML = '<option value="">– Box wählen –</option>' + store.listSlots().map(s =>
+      `<option value="${esc(s.id)}" ${s.id === draft.slotId ? 'selected' : ''}>${esc(s.id)}${s.label ? ' · ' + esc(s.label) : ''}</option>`).join('');
+    $('#slotinfo').innerHTML = draft.slotId ? `✓ Box <b>${esc(draft.slotId)}</b>` : '';
   }
 
   function handleCode(raw) {
@@ -412,15 +383,14 @@ function viewEin() {
 
   async function chooseSlot(id) {
     // Test-App: jedes gescannte Fach-Etikett funktioniert sofort, ohne Rückfrage
-    if (!store.getSlot(id) && TEST_APP) store.addSlot({ id, label: '', capacity: 8 });
+    if (!store.getSlot(id) && TEST_APP) store.addSlot({ id });
     if (!store.getSlot(id)) {
       if (user.role !== 'admin') return toast(`Lagerplatz ${id} ist noch nicht angelegt. Bitte die Chefin, ihn anzulegen.`, { type: 'error' });
       if (!(await confirmDialog(`Lagerplatz ${id} gibt es noch nicht. Jetzt anlegen?`, { ok: `${id} anlegen` }))) return;
-      try { store.addSlot({ id, label: '', capacity: 8 }); toast(`Lagerplatz ${id} angelegt.`); }
+      try { store.addSlot({ id }); toast(`Lagerplatz ${id} angelegt.`); }
       catch (err) { return toast(err.message, { type: 'error' }); }
     }
     draft.slotId = id;
-    draft.autoSlot = false;
     feedback();
     refreshSlots();
     $('#save').focus();
@@ -441,9 +411,8 @@ function viewEin() {
     $('#names').innerHTML = store.knownNames(name.value).map(n => `<option value="${esc(n)}">`).join('');
     const stored = name.value.trim().length >= 3 ? store.search(name.value).exact : [];
     $('#nameinfo').innerHTML = stored.length
-      ? `Schon im Lager für diesen Namen: ${stored.map(p => `<b>${esc(p.name)}</b> in ${esc(p.slotId)}`).join(', ')}`
+      ? `Schon im Lager für diesen Namen: ${stored.map(p => `<b>${esc(p.name)}</b> in Box ${esc(p.slotId)}`).join(', ')}`
       : '';
-    refreshSlots();
   });
   name.addEventListener('keydown', e => {
     if (e.key !== 'Enter') return;
@@ -453,8 +422,7 @@ function viewEin() {
     slot.focus();
   });
   // Ein Platz-QR, gescannt während der Fokus auf der Auswahl liegt
-  slot.addEventListener('change', () => { draft.slotId = slot.value; draft.autoSlot = false; refreshSlots(); });
-  $$('#size button').forEach(b => b.onclick = () => setSize(b.dataset.size));
+  slot.addEventListener('change', () => { draft.slotId = slot.value; refreshSlots(); });
 
   // Scanner tippt in ein beliebiges Feld? Platz-QR global abfangen.
   let buf = '', bufTimer;
@@ -471,10 +439,7 @@ function viewEin() {
     draft.slotId = slot.value;
     if (!draft.tracking) { toast('Bitte zuerst die Sendungsnummer scannen.', { type: 'error' }); return code.focus(); }
     if (!draft.name) { toast('Bitte den Namen eingeben.', { type: 'error' }); return name.focus(); }
-    if (!draft.slotId) { toast('Bitte einen Lagerplatz wählen.', { type: 'error' }); return slot.focus(); }
-    const s = store.getSlot(draft.slotId);
-    if (store.slotUsage(s.id) + store.SIZE_UNITS[draft.size] > s.capacity &&
-        !(await confirmDialog(`Platz ${s.id} ist eigentlich voll. Trotzdem einlagern?`, { ok: 'Trotzdem einlagern' }))) return;
+    if (!draft.slotId) { toast('Bitte die Box scannen.', { type: 'error' }); return; }
     try {
       const p = store.checkIn(user.id, draft, { allowDuplicate: TEST_APP });
       toast(`Eingelagert: ${p.name} → ${p.slotId}`, { action: 'Rückgängig', onAction: () => { store.cancelCheckIn(user.id, p.id); viewEin(); } });
@@ -486,9 +451,9 @@ function viewEin() {
   // Zustand wiederherstellen (nach Re-Render)
   name.value = draft.name;
   if (draft.tracking) $('#codeinfo').innerHTML = `✓ <b>${esc(draft.tracking)}</b>`;
-  setSize(draft.size);
+  refreshSlots();
   renderRecent();
-  (draft.tracking ? name : code).focus();
+  (draft.tracking && !draft.name ? name : code).focus();
 }
 
 function renderRecent() {
@@ -533,7 +498,7 @@ function parcelCard(p, { actions = true } = {}) {
       <div class="where"><span class="label">Platz</span><span class="slot-big">${esc(p.slotId)}</span><span class="muted small">${esc(store.getSlot(p.slotId)?.label ?? '')}</span></div>
       <div class="what">
         <div class="pname">${esc(p.name)}</div>
-        <div class="muted small">${esc(shortTracking(p.tracking))} · ${store.SIZE_LABEL[p.size]} · seit ${fmtDate(p.inAt)} (${days} ${days === 1 ? 'Tag' : 'Tage'})</div>
+        <div class="muted small">${esc(shortTracking(p.tracking))} · seit ${fmtDate(p.inAt)} (${days} ${days === 1 ? 'Tag' : 'Tage'})</div>
         ${overdue ? `<div class="warn small">Frist abgelaufen am ${fmtDate(store.dueDate(p))}</div>` : ''}
       </div>
       ${actions ? `<button class="btn primary" data-out="${p.id}">Ausgeben</button>` : ''}
@@ -668,8 +633,8 @@ function viewBericht() {
         ${barChart(s.buckets, { label: b => b.label, value: b => b.n, ariaLabel: 'Liegedauer im Bestand' })}</section>
     </div>
     <section class="card">
-      <h2>Auslastung der Lagerplätze</h2>
-      <div class="slots">${s.slots.map(sl => slotBar(sl)).join('')}</div>
+      <h2>Pakete je Box</h2>
+      <div class="slots">${s.slots.map(sl => slotBar(sl, Math.max(...s.slots.map(x => x.count)))).join('')}</div>
     </section>
     <section class="card">
       <div class="row-between"><h2>Export & Protokoll</h2><button class="btn" id="csv">Excel-Export (CSV)</button></div>
@@ -686,12 +651,12 @@ function viewBericht() {
   }, { once: true });
 }
 
-function slotBar(sl) {
-  const pct = Math.min(100, Math.round((sl.used / sl.capacity) * 100));
-  return `<div class="slotbar ${pct >= 100 ? 'full' : pct >= 75 ? 'high' : ''}">
+function slotBar(sl, max) {
+  const pct = max ? Math.round((sl.count / max) * 100) : 0;
+  return `<div class="slotbar">
     <span class="slot-badge">${esc(sl.id)}</span>
     <div class="bar"><i style="width:${pct}%"></i></div>
-    <span class="muted small">${sl.count} Pak. · ${pct}%</span></div>`;
+    <span class="muted small">${sl.count} ${sl.count === 1 ? 'Paket' : 'Pakete'}</span></div>`;
 }
 
 // ---------------- Lagerplätze ----------------
@@ -701,34 +666,28 @@ function viewPlaetze() {
   main.innerHTML = `
     <section class="card">
       <div class="row-between"><h2>Alle Plätze</h2><button class="btn outline" id="printqr">${icon('drucken')}QR-Etiketten</button></div>
-      <p class="muted small">„Kapazität“ in Einheiten: klein = 1, mittel = 2, groß = 4. „Buchstaben“ ist optional, z. B. <code>A-C</code> oder <code>SCH</code>. Dann schlägt die App diese Box für passende Nachnamen zuerst vor.</p>
       <div class="table-wrap"><table>
-        <thead><tr><th><input type="checkbox" id="all" checked aria-label="Alle"></th><th>Code</th><th>Bezeichnung</th><th>Buchstaben</th><th>Kapazität</th><th>Belegt</th><th>Aktiv</th></tr></thead>
+        <thead><tr><th><input type="checkbox" id="all" checked aria-label="Alle"></th><th>Code</th><th>Bezeichnung</th><th>Pakete</th><th>Aktiv</th></tr></thead>
         <tbody>${slots.map(s => `<tr data-id="${esc(s.id)}" class="${s.active ? '' : 'inactive'}">
           <td><input type="checkbox" class="sel" ${s.active ? 'checked' : ''} aria-label="Auswählen"></td>
           <td><b>${esc(s.id)}</b></td>
           <td><input data-f="label" value="${esc(s.label)}"></td>
-          <td><input data-f="letters" value="${esc(s.letters)}" size="6"></td>
-          <td><input data-f="capacity" type="number" min="1" value="${s.capacity}" style="width:5em"></td>
-          <td>${store.slotCount(s.id)} Pak.</td>
+          <td>${store.slotCount(s.id)}</td>
           <td><input type="checkbox" data-f="active" ${s.active ? 'checked' : ''} aria-label="Aktiv"></td></tr>`).join('')}</tbody>
       </table></div>
     </section>
     <div class="grid2">
       <section class="card"><h2>Einzelnen Platz anlegen</h2>
         <form id="one" class="stack">
-          <label>Code<input name="id" required placeholder="z. B. A oder REGAL-3" maxlength="12"></label>
-          <label>Bezeichnung<input name="label" placeholder="z. B. Box A–C, oben links"></label>
-          <label>Buchstaben (optional)<input name="letters" placeholder="A-C"></label>
-          <label>Kapazität<input name="capacity" type="number" min="1" value="8"></label>
+          <label>Code<input name="id" required placeholder="z. B. A3" maxlength="12"></label>
+          <label>Bezeichnung<input name="label" placeholder="z. B. Regal A, Box 3"></label>
           <button class="btn primary">Anlegen</button>
         </form></section>
       <section class="card"><h2>Viele auf einmal</h2>
         <form id="many" class="stack">
-          <label>Präfix<input name="prefix" required value="R" maxlength="6"></label>
-          <div class="row"><label>von<input name="from" type="number" value="1" min="1"></label><label>bis<input name="to" type="number" value="10" min="1"></label></div>
-          <label>Kapazität je Platz<input name="capacity" type="number" min="1" value="6"></label>
-          <p class="muted small">Ergibt z. B. R-01 … R-10</p>
+          <label>Regal<input name="prefix" required value="C" maxlength="6"></label>
+          <div class="row"><label>Box von<input name="from" type="number" value="1" min="1"></label><label>bis<input name="to" type="number" value="4" min="1"></label></div>
+          <p class="muted small">Ergibt z. B. C1 … C4</p>
           <button class="btn primary">Anlegen</button>
         </form></section>
     </div>`;
@@ -751,13 +710,13 @@ function viewPlaetze() {
   };
   $('#many').onsubmit = e => {
     e.preventDefault();
-    const { prefix, from, to, capacity } = Object.fromEntries(new FormData(e.target));
+    const { prefix, from, to } = Object.fromEntries(new FormData(e.target));
     const a = +from, b = +to;
     if (b < a || b - a > 200) return toast('Bitte einen sinnvollen Bereich (max. 200) angeben.', { type: 'error' });
-    const width = Math.max(2, String(b).length);
+    const r = prefix.trim().toUpperCase();
     let n = 0;
     for (let i = a; i <= b; i++) {
-      try { store.addSlot({ id: `${prefix.toUpperCase()}-${String(i).padStart(width, '0')}`, capacity }); n++; } catch { /* existiert */ }
+      try { store.addSlot({ id: `${r}${i}`, label: `Regal ${r}, Box ${i}` }); n++; } catch { /* existiert */ }
     }
     toast(`${n} Plätze angelegt.`);
     viewPlaetze();
@@ -863,9 +822,11 @@ function viewEinstellungen() {
 
 // ---------------- Start ----------------
 
-if (TEST_APP && !store.isSetUp()) await store.setupTestApp();
-// Test-App: Lagerplatz A3 gibt es immer (auch bei älteren Testdaten auf dem Gerät)
-if (TEST_APP && !store.getSlot('A3')) store.addSlot({ id: 'A3', label: 'Regal A, Fach 3', capacity: 10 });
+// Test-App: beim ersten Start oder wenn es neue Testdaten gibt, frisch beginnen
+if (TEST_APP && (!store.isSetUp() || store.testDataVersion() !== store.TEST_DATA_VERSION)) {
+  await store.setupTestApp();
+  setUser(null);
+}
 store.anonymizeOld();
 render();
 try { $('.footer').textContent += ` · Version ${APP_VERSION}`; } catch { /* egal */ }
