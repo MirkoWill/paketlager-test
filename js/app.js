@@ -1,12 +1,12 @@
 // Oberfläche von RegalLotse.
 import * as store from './store.js';
-import { classifyCode, SLOT_PREFIX } from './barcode.js';
+import { classifyCode, SLOT_PREFIX, looksLikeSlot } from './barcode.js';
 import { scanWithCamera, feedback, lastScanAll } from './scanner.js';
 import { computeStats, dayChart, barChart, parcelsCsv } from './report.js';
 import { icon } from './icons.js';
 
 const BRAND = 'Willbrandt und Kompagnon';
-const APP_VERSION = '11';
+const APP_VERSION = '12';
 const AUTO_LOGOUT_MIN = 20;
 // Test-App: wird von der Vorführseite gesetzt (window.PAKETLAGER_TEST = true)
 const TEST_APP = window.PAKETLAGER_TEST === true;
@@ -489,7 +489,7 @@ function viewEin() {
   name.value = draft.name;
   name.addEventListener('input', () => {
     draft.name = name.value;
-    if (name.value.toUpperCase().startsWith(SLOT_PREFIX)) return;
+    if (looksLikeSlot(name.value)) return;
     $('#names').innerHTML = store.knownNames(name.value).map(n => `<option value="${esc(n)}">`).join('');
     const stored = name.value.trim().length >= 3 ? store.search(name.value).exact : [];
     $('#nameinfo').innerHTML = stored.length
@@ -510,7 +510,7 @@ function viewEin() {
   let buf = '', bufTimer;
   document.onkeydown = e => {
     if (e.target === code || e.target === name) return;
-    if (e.key === 'Enter' && buf.toUpperCase().startsWith(SLOT_PREFIX)) { e.preventDefault(); handleCode(buf); buf = ''; return; }
+    if (e.key === 'Enter' && looksLikeSlot(buf)) { e.preventDefault(); handleCode(buf); buf = ''; return; }
     if (e.key.length === 1) { buf += e.key; clearTimeout(bufTimer); bufTimer = setTimeout(() => (buf = ''), 300); }
   };
   $('#f').onsubmit = e => {
@@ -554,6 +554,7 @@ function viewAus() {
   };
   q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => run(q.value), 150); });
   bindScanField(q, $('#cam'), v => run(v, true), 'Code des Kunden scannen', { want: 'tracking', leitcodeAfterMs: 2500 });
+  q.focus(); // bereit für die Scan-Taste eines Handscanners; die Bildschirmtastatur bleibt zu
 }
 
 function parcelCard(p, { actions = true } = {}) {
@@ -850,8 +851,7 @@ function viewEinstellungen() {
       <form id="f" class="stack">
         <label>Name der Filiale<input name="name" value="${esc(f.name)}"></label>
         <label>Lagerfrist (Werktage Mo–Sa)<input name="lagerfristWerktage" type="number" min="1" max="30" value="${f.lagerfristWerktage}"></label>
-        <label>Namen löschen nach Abholung (Tage)<input name="loeschfristTage" type="number" min="1" max="365" value="${f.loeschfristTage}">
-          <span class="muted small">Datenschutz: Danach bleiben nur anonyme Zahlen für das Reporting.</span></label>
+        <p class="hint">Datenschutz: Name und Sendungsnummer abgeholter Pakete werden zwei Minuten nach der Ausgabe gelöscht. Für das Cockpit bleiben nur anonyme Zahlen.</p>
         <button class="btn primary">Speichern</button>
       </form>
     </section>
@@ -868,7 +868,7 @@ function viewEinstellungen() {
   $('#f').onsubmit = e => {
     e.preventDefault();
     const d = Object.fromEntries(new FormData(e.target));
-    store.updateFiliale({ name: d.name.trim(), lagerfristWerktage: Math.max(1, +d.lagerfristWerktage), loeschfristTage: Math.max(1, +d.loeschfristTage) });
+    store.updateFiliale({ name: d.name.trim(), lagerfristWerktage: Math.max(1, +d.lagerfristWerktage), });
     toast('Gespeichert.');
     renderHeader('einstellungen');
   };
@@ -895,6 +895,7 @@ if (TEST_APP && (!store.isSetUp() || store.testDataVersion() !== store.TEST_DATA
   setUser(null);
 }
 store.anonymizeOld();
+setInterval(() => store.anonymizeOld(), 30000);
 render();
 try { $('.footer').textContent += ` · Version ${APP_VERSION}`; } catch { /* egal */ }
 if ('serviceWorker' in navigator && location.protocol !== 'file:' && !inViewer()) {

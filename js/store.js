@@ -267,12 +267,21 @@ export function daysStored(p, now = new Date()) {
 // ---------- Datenschutz ----------
 
 /** Entfernt Namen und Adressbezug bei abgeschlossenen Paketen nach Ablauf der Löschfrist. Statistik bleibt. */
+/** Wie lange ein ausgegebenes Paket noch mit Daten da ist (für „Rückgängig“). */
+export const UNDO_MS = 2 * 60000;
+
+/**
+ * Datensparsamkeit: Abgeholte (und zurückgeschickte) Pakete verlieren nach UNDO_MS
+ * Name, Sendungsnummer und Adressbezug. Die Ausgabe dokumentiert ohnehin die DHL-Software.
+ * Übrig bleiben nur anonyme Zeiten für das Cockpit.
+ */
 export function anonymizeOld(now = new Date()) {
-  const limit = now - state.filiale.loeschfristTage * 86400000;
+  const limit = now - UNDO_MS;
   let n = 0;
   for (const p of state.parcels) {
+    if (p.anonymized && p.tracking) { p.tracking = ''; n++; } // ältere Stände: Restnummer entfernen
     if (p.status !== 'lagernd' && !p.anonymized && new Date(p.outAt) < limit) {
-      p.name = '(gelöscht)'; p.nameKey = ''; p.leitcode = null; p.note = ''; p.tracking = '…' + p.tracking.slice(-4);
+      p.name = '(gelöscht)'; p.nameKey = ''; p.leitcode = null; p.note = ''; p.tracking = '';
       p.trackingKey = ''; p.anonymized = true; n++;
     }
   }
@@ -301,7 +310,7 @@ export function resetAll() {
 }
 
 /** Stand der Testdaten. Erhöhen, damit alle Test-Geräte beim nächsten Öffnen frisch starten. */
-export const TEST_DATA_VERSION = 2;
+export const TEST_DATA_VERSION = 3;
 export const testDataVersion = () => state.testDataVersion ?? 1;
 
 /** Test-App: Filiale, Team und Testdaten auf einen Schlag. */
@@ -345,7 +354,7 @@ export function seedDemo(userId) {
       const outAt = +out;
       if (outAt > now || outAt < inAt) continue;
       state.parcels.push({
-        id: uid(), tracking: '…' + (1000 + d * 10 + k), trackingKey: '', carrier: 'DHL', leitcode: null, name: '(gelöscht)', nameKey: '',
+        id: uid(), tracking: '', trackingKey: '', carrier: 'DHL', leitcode: null, name: '(gelöscht)', nameKey: '',
         slotId: 'A1', note: '', status: k === 4 ? 'retoure' : 'ausgegeben', anonymized: true,
         inAt: new Date(inAt).toISOString(), inBy: userId, outAt: new Date(outAt).toISOString(), outBy: userId,
       });

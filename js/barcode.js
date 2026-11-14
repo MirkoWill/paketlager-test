@@ -4,6 +4,12 @@
 
 export const SLOT_PREFIX = 'PL:';
 
+// Box-Etikett „PL:A3“. Handscanner mit falsch eingestelltem Tastaturlayout liefern
+// statt „:“ oft „Ö“ oder „;“ und statt „-“ ein „ß“ oder „/“. Das wird hier toleriert.
+// Groß geschrieben und ohne Leerzeichen, damit ein getippter Name wie „Plötz“ nie als Box gilt.
+const SLOT_RE = /^PL[:;ÖÄ>]([A-Z0-9\-ß\/]{1,12})$/;
+export const looksLikeSlot = str => SLOT_RE.test(String(str ?? '').trim());
+
 /** Entfernt Steuerzeichen und Symbologie-Präfixe, die Scanner mitsenden. */
 export function cleanCode(raw) {
   return String(raw ?? '')
@@ -19,9 +25,8 @@ export function cleanCode(raw) {
  */
 export function classifyCode(raw) {
   const str = String(raw ?? '').trim();
-  if (str.toUpperCase().startsWith(SLOT_PREFIX)) {
-    return { type: 'slot', value: str.slice(SLOT_PREFIX.length).trim().toUpperCase() };
-  }
+  const slot = SLOT_RE.exec(str);
+  if (slot) return { type: 'slot', value: slot[1].replace(/[ß/]/g, '-') };
   const c = cleanCode(str);
   if (!c) return { type: 'unknown', value: '' };
 
