@@ -1,0 +1,826 @@
+// Oberfläche der Paketlager-App.
+import * as store from './store.js';
+import { classifyCode, SLOT_PREFIX } from './barcode.js';
+import { scanWithCamera, feedback, lastScanAll } from './scanner.js';
+import { computeStats, dayChart, barChart, parcelsCsv } from './report.js';
+import { icon } from './icons.js';
+
+const BRAND = 'Willbrandt und Kompagnon';
+const AUTO_LOGOUT_MIN = 20;
+// Test-App: wird von der Vorführseite gesetzt (window.PAKETLAGER_TEST = true)
+const TEST_APP = window.PAKETLAGER_TEST === true;
+
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmtDate = d => new Date(d).toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' });
+const fmtDateTime = d => new Date(d).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+const shortTracking = t => t.length > 10 ? '…' + t.slice(-8) : t;
+
+const main = $('#main');
+let user = null;
+try { user = JSON.parse(sessionStorage.getItem('paketlager.user')); } catch { /* egal */ }
+
+// ---------------- Hilfen ----------------
+
+function toast(text, { type = 'ok', action, onAction, ms = 4000 } = {}) {
+  const box = $('#toasts');
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.innerHTML = `<span>${esc(text)}</span>${action ? `<button class="btn ghost small">${esc(action)}</button>` : ''}`;
+  if (action) el.querySelector('button').onclick = () => { onAction?.(); el.remove(); };
+  box.appendChild(el);
+  setTimeout(() => el.remove(), action ? ms * 2 : ms);
+}
+
+function setUser(u) {
+  user = u;
+  try { u ? sessionStorage.setItem('paketlager.user', JSON.stringify(u)) : sessionStorage.removeItem('paketlager.user'); } catch { /* egal */ }
+}
+
+function go(route) {
+  if (location.hash === '#' + route) render(); else location.hash = route;
+}
+
+// Läuft die App in der claude.ai-Vorschau? Dort gibt es kein Drucken und keine Browser-Dialoge.
+const inViewer = () => typeof window.claude?.use === 'function';
+
+/** Eigener Dialog statt confirm()/prompt() (funktioniert überall). */
+function dialog({ text, input = null, ok = 'OK', danger = false }) {
+  return new Promise(resolve => {
+    const wrap = document.createElement('div');
+    wrap.className = 'modal-overlay';
+    wrap.innerHTML = `
+      <form class="modal" role="dialog" aria-modal="true">
+        <p class="modal-text"></p>
+        ${input ? `<input id="modal-input" autocomplete="off" ${input.numeric ? 'inputmode="numeric"' : ''}>` : ''}
+        <div class="modal-actions">
+          <button type="button" class="btn" data-cancel>Abbrechen</button>
+          <button class="btn ${danger ? 'danger' : 'primary'}">${esc(ok)}</button>
+        </div>
+      </form>`;
+    $('.modal-text', wrap).textContent = text;
+    document.body.appendChild(wrap);
+    const field = $('#modal-input', wrap);
+    (field ?? $('.btn.primary, .btn.danger', wrap)).focus();
+    const done = v => { wrap.remove(); resolve(v); };
+    $('[data-cancel]', wrap).onclick = () => done(input ? null : false);
+    $('form', wrap).onsubmit = e => { e.preventDefault(); done(input ? field.value.trim() : true); };
+    wrap.addEventListener('keydown', e => { if (e.key === 'Escape') done(input ? null : false); });
+  });
+}
+const confirmDialog = (text, opts = {}) => dialog({ text, ...opts });
+const askText = (text, opts = {}) => dialog({ text, input: opts, ok: opts.ok ?? 'OK', danger: opts.danger });
+
+async function download(filename, content, type) {
+  if (inViewer()) {
+    const dl = await window.claude.use('downloads').catch(() => null);
+    if (!dl) return toast('Download ist in dieser Vorschau nicht verfügbar.', { type: 'error' });
+    try { await dl.save({ filename, data: new Blob([content], { type }) }); }
+    catch { toast('Download abgebrochen.', { type: 'info' }); }
+    return;
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([content], { type }));
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+function qrSvg(text) {
+  const qr = window.qrcode(0, 'M');
+  qr.addData(text);
+  qr.make();
+  return qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+}
+
+/** Feld mit Kamera-Knopf. Ruft onCode(raw) bei Enter oder Kamera-Treffer. */
+function bindScanField(input, cameraBtn, onCode, title) {
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); const v = input.value.trim(); if (v) onCode(v); }
+  });
+  cameraBtn?.addEventListener('click', async () => {
+    const v = await scanWithCamera(title);
+    if (v) onCode(v);
+  });
+}
+
+// Auto-Abmelden bei Inaktivität
+let idleTimer;
+function resetIdle() {
+  clearTimeout(idleTimer);
+  if (user) idleTimer = setTimeout(() => { setUser(null); toast('Automatisch abgemeldet.', { type: 'info' }); go('login'); }, AUTO_LOGOUT_MIN * 60000);
+}
+['pointerdown', 'keydown'].forEach(ev => document.addEventListener(ev, resetIdle, { passive: true }));
+
+// ---------------- Kopf & Navigation ----------------
+
+const TITLES = {
+  setup: 'Willkommen', login: 'Anmelden', ein: 'Einlagern', aus: 'Ausgabe', bestand: 'Bestand',
+  bericht: 'Cockpit', mehr: 'Mehr', plaetze: 'Lagerplätze', team: 'Team', einstellungen: 'Einstellungen',
+};
+const TABS = [
+  { route: 'ein', label: 'Einlagern', icon: 'einlagern' },
+  { route: 'aus', label: 'Ausgabe', icon: 'ausgabe' },
+  { route: 'bestand', label: 'Bestand', icon: 'bestand' },
+  { route: 'bericht', label: 'Cockpit', icon: 'cockpit', admin: true },
+  { route: 'mehr', label: 'Mehr', icon: 'mehr' },
+];
+const ADMIN_ROUTES = ['bericht', 'plaetze', 'team', 'einstellungen'];
+
+// Schriftgröße (A+), pro Gerät gemerkt
+let bigText = false;
+try { bigText = localStorage.getItem('paketlager.bigtext') === '1'; } catch { /* egal */ }
+document.documentElement.classList.toggle('big-text', bigText);
+
+function renderHeader(route) {
+  const f = store.getFiliale();
+  $('#header').innerHTML = `
+    <div class="wordmark"><span class="wm-light">Willbrandt</span> <span class="wm-bold">und Kompagnon</span></div>
+    <div class="hero">
+      <div class="hero-inner">
+        <div class="hero-top">
+          <span class="eyebrow">${esc(f.name || 'Paketlager')}</span>
+          <div class="hero-actions">
+            <button class="pill" id="aplus" aria-pressed="${bigText}" title="Größere Schrift">A+</button>
+            ${user ? `<a class="pill" href="#mehr" title="Angemeldet als ${esc(user.name)}">${esc(initials(user.name))}</a>` : ''}
+          </div>
+        </div>
+        <h1 class="hero-title">${esc(TITLES[route] ?? 'Paketlager')}</h1>
+      </div>
+    </div>`;
+  const activeTab = ['plaetze', 'team', 'einstellungen'].includes(route) ? 'mehr' : route;
+  $('#nav').innerHTML = user
+    ? TABS.filter(n => !n.admin || user.role === 'admin').map(n =>
+        `<a href="#${n.route}" class="${activeTab === n.route ? 'active' : ''}">${icon(n.icon)}<span>${n.label}</span></a>`).join('')
+    : '';
+  document.body.classList.toggle('has-tabs', !!user);
+  $('#aplus').onclick = () => {
+    bigText = !bigText;
+    document.documentElement.classList.toggle('big-text', bigText);
+    $('#aplus').setAttribute('aria-pressed', bigText);
+    try { localStorage.setItem('paketlager.bigtext', bigText ? '1' : '0'); } catch { /* egal */ }
+  };
+  document.title = `${TITLES[route] ?? ''} · Paketlager`;
+}
+
+const initials = n => n.split(/\s+/).filter(Boolean).map(w => w[0]).slice(0, 2).join('').toUpperCase();
+
+// ---------------- Router ----------------
+
+function render() {
+  let route = location.hash.slice(1) || 'ein';
+  if (route === 'ruecksendungen') route = 'bestand';
+  if (!store.isSetUp()) route = 'setup';
+  else if (!user) route = 'login';
+  else if (route === 'login' || route === 'setup') route = 'ein';
+  if (ADMIN_ROUTES.includes(route) && user.role !== 'admin') route = 'ein';
+  renderHeader(route);
+  main.innerHTML = '';
+  ({ setup: viewSetup, login: viewLogin, ein: viewEin, aus: viewAus, bestand: viewBestand, bericht: viewBericht, mehr: viewMehr,
+     plaetze: viewPlaetze, team: viewTeam, einstellungen: viewEinstellungen }[route] ?? viewEin)();
+  window.scrollTo(0, 0);
+  resetIdle();
+}
+window.addEventListener('hashchange', render);
+
+// ---------------- Mehr (Kachel-Übersicht) ----------------
+
+function viewMehr() {
+  const tiles = [
+    user.role === 'admin' && { href: '#plaetze', icon: 'plaetze', title: 'Lagerplätze', sub: 'Boxen & Regale, QR-Etiketten drucken' },
+    user.role === 'admin' && { href: '#team', icon: 'team', title: 'Team', sub: 'Personen, Rollen und PINs' },
+    user.role === 'admin' && { href: '#einstellungen', icon: 'einstellungen', title: 'Einstellungen', sub: 'Fristen, Datensicherung' },
+    { href: '#ruecksendungen', icon: 'retoure', title: 'Rücksendungen', sub: 'Pakete mit abgelaufener Frist' },
+  ].filter(Boolean);
+  main.innerHTML = `
+    <section class="signed-in">
+      <span class="muted">Angemeldet als</span>
+      <strong>${esc(user.name)} · ${user.role === 'admin' ? 'Chefin' : 'Mitarbeiterin'}</strong>
+    </section>
+    <h2 class="lead">Was möchten Sie erledigen?</h2>
+    <div class="tiles">
+      ${tiles.map(t => `<a class="tile" href="${t.href}">${icon(t.icon, 'tile-ic')}<span class="tile-title">${t.title}</span><span class="tile-sub">${t.sub}</span></a>`).join('')}
+      <button class="tile" id="logout">${icon('abmelden', 'tile-ic')}<span class="tile-title">Wechseln</span><span class="tile-sub">Abmelden, andere Person meldet sich an</span></button>
+      ${TEST_APP ? `<button class="tile" id="testreset">${icon('retoure', 'tile-ic')}<span class="tile-title">Test neu starten</span><span class="tile-sub">Alles zurück auf die Abrafaxe-Testdaten</span></button>` : ''}
+    </div>`;
+  $('#testreset')?.addEventListener('click', async () => {
+    if (!(await confirmDialog('Test-App auf den Anfangszustand zurücksetzen? Alle Eingaben gehen verloren.', { ok: 'Zurücksetzen', danger: true }))) return;
+    await store.setupTestApp();
+    setUser(null);
+    toast('Test-App zurückgesetzt.');
+    go('login');
+  });
+  $('#logout').onclick = () => { setUser(null); go('login'); };
+}
+
+// ---------------- Ersteinrichtung ----------------
+
+function viewSetup() {
+  main.innerHTML = `
+    <section class="card narrow">
+      <h2>Einmalige Einrichtung</h2>
+      <p class="muted">Danach melden sich alle mit Name und PIN an.</p>
+      <form id="f" class="stack">
+        <label>Name der Filiale<input name="filiale" required placeholder="z. B. Postfiliale 546, Dorfstr. 25"></label>
+        <label>Name der Chefin / des Admins<input name="name" required autocomplete="off"></label>
+        <label>PIN (4–8 Ziffern)<input name="pin" required inputmode="numeric" type="password" pattern="\\d{4,8}" autocomplete="new-password"></label>
+        <label>PIN wiederholen<input name="pin2" required inputmode="numeric" type="password" pattern="\\d{4,8}" autocomplete="new-password"></label>
+        <label class="check"><input type="checkbox" name="demo" checked> Beispiel-Lagerplätze und Testpakete anlegen (zum Ausprobieren)</label>
+        <button class="btn primary big">Einrichten</button>
+      </form>
+    </section>`;
+  $('#f').onsubmit = async e => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target));
+    if (fd.pin !== fd.pin2) return toast('Die PINs stimmen nicht überein.', { type: 'error' });
+    try {
+      store.updateFiliale({ name: fd.filiale.trim() });
+      const id = await store.addUser({ name: fd.name, pin: fd.pin, role: 'admin' });
+      if (fd.demo) store.seedDemo(id);
+      setUser(await store.login(id, fd.pin));
+      go(fd.demo ? 'ein' : 'plaetze');
+    } catch (err) { toast(err.message, { type: 'error' }); }
+  };
+}
+
+// ---------------- Anmeldung ----------------
+
+function viewLogin() {
+  const users = store.listUsers().filter(u => u.active);
+  main.innerHTML = `
+    <section class="card narrow">
+      <h2>Wer arbeitet gerade?</h2>
+      ${TEST_APP ? '<p class="test-hint"><b>Test-App:</b> PIN für Chefin <b>1234</b>, für Mitarbeiterin <b>0000</b></p>' : ''}
+      <div class="user-grid">${users.map(u => `<button class="user-tile" data-id="${u.id}">${esc(u.name)}</button>`).join('')}</div>
+      <form id="pinform" class="stack hidden">
+        <label><span id="pinlabel">PIN</span><input id="pin" inputmode="numeric" type="password" autocomplete="off" maxlength="8"></label>
+        <button class="btn primary big">Anmelden</button>
+      </form>
+    </section>`;
+  let chosen = null;
+  $$('.user-tile').forEach(b => b.onclick = () => {
+    chosen = b.dataset.id;
+    $$('.user-tile').forEach(x => x.classList.toggle('selected', x === b));
+    $('#pinform').classList.remove('hidden');
+    $('#pinlabel').textContent = `PIN für ${b.textContent}`;
+    $('#pin').value = '';
+    $('#pin').focus();
+  });
+  $('#pinform').onsubmit = async e => {
+    e.preventDefault();
+    const u = await store.login(chosen, $('#pin').value);
+    if (!u) { $('#pin').value = ''; return toast('PIN falsch.', { type: 'error' }); }
+    setUser(u);
+    go('ein');
+  };
+  if (users.length === 1) $('.user-tile').click();
+}
+
+// ---------------- Einlagern ----------------
+
+const draft = { tracking: '', carrier: '', leitcode: '', name: '', size: 'M', slotId: '' };
+const resetDraft = () => Object.assign(draft, { tracking: '', carrier: '', leitcode: '', name: '', size: 'M', slotId: '' });
+
+function viewEin() {
+  if (!store.listSlots().length) {
+    main.innerHTML = `<section class="card"><h2>Noch keine Lagerplätze</h2>
+      <p>${user.role === 'admin' ? 'Lege zuerst Lagerplätze an und drucke die QR-Etiketten.' : 'Bitte die Chefin, zuerst Lagerplätze anzulegen.'}</p>
+      ${user.role === 'admin' ? '<a class="btn primary" href="#plaetze">Lagerplätze anlegen</a>' : ''}</section>`;
+    return;
+  }
+  main.innerHTML = `
+    <section class="card">
+      <h2>Paket einlagern</h2>
+      <form id="f" class="stack" autocomplete="off">
+        <div class="field">
+          <label for="code">1 · Sendungsnummer scannen</label>
+          <div class="scanrow">
+            <input id="code" placeholder="Barcode scannen oder eintippen" autofocus>
+            <button type="button" class="btn icon" id="cam1" title="Mit Kamera scannen" aria-label="Mit Kamera scannen">${icon('scan')}</button>
+          </div>
+          <div id="codeinfo" class="info"></div>
+        </div>
+        <div class="field">
+          <label for="name">2 · Name des Empfängers</label>
+          <input id="name" list="names" placeholder="Nachname, Vorname …">
+          <datalist id="names"></datalist>
+          <div id="nameinfo" class="info"></div>
+        </div>
+        <div class="field">
+          <span class="label">3 · Größe</span>
+          <div class="seg" id="size">
+            ${Object.entries(store.SIZE_LABEL).map(([k, v]) => `<button type="button" data-size="${k}">${v}</button>`).join('')}
+          </div>
+        </div>
+        <div class="field">
+          <label for="slot">4 · Lagerplatz <span class="muted">(QR am Platz scannen oder wählen)</span></label>
+          <div class="scanrow">
+            <select id="slot"></select>
+            <button type="button" class="btn icon" id="cam2" title="Platz-QR mit Kamera scannen" aria-label="Platz-QR mit Kamera scannen">${icon('scan')}</button>
+          </div>
+          <div id="slotinfo" class="info"></div>
+        </div>
+        <button class="btn primary big" id="save">Einlagern</button>
+      </form>
+    </section>
+    <section class="card">
+      <h2>Zuletzt eingelagert</h2>
+      <div id="recent"></div>
+    </section>`;
+
+  const code = $('#code'), name = $('#name'), slot = $('#slot');
+
+  function refreshSlots() {
+    const suggestion = draft.name ? store.suggestSlot(draft.name, draft.size) : null;
+    const same = draft.name ? sameNameSlot() : null;
+    if (!draft.slotId || draft.autoSlot) {
+      draft.slotId = same ?? suggestion ?? '';
+      draft.autoSlot = true;
+    }
+    slot.innerHTML = '<option value="">– Platz wählen –</option>' + store.listSlots().map(s => {
+      const free = s.capacity - store.slotUsage(s.id);
+      return `<option value="${esc(s.id)}" ${s.id === draft.slotId ? 'selected' : ''}>${esc(s.id)}${s.label ? ' · ' + esc(s.label) : ''} (${free <= 0 ? 'voll' : 'frei ' + free})</option>`;
+    }).join('');
+    const info = [];
+    if (same && draft.slotId === same) info.push(`Vorschlag: <b>${esc(same)}</b>, dort liegt schon ein Paket für diesen Namen.`);
+    else if (suggestion && draft.slotId === suggestion) info.push(`Vorschlag: <b>${esc(suggestion)}</b>`);
+    if (draft.name && !suggestion) info.push('<span class="warn">Kein Platz mit genug freiem Raum. Bitte trotzdem wählen oder Platz anlegen.</span>');
+    $('#slotinfo').innerHTML = info.join(' ');
+  }
+
+  function sameNameSlot() {
+    const hit = store.search(draft.name).exact.find(p => p.nameKey && store.SIZE_UNITS[draft.size] <= store.getSlot(p.slotId).capacity - store.slotUsage(p.slotId));
+    return hit?.slotId ?? null;
+  }
+
+  function setSize(s) {
+    draft.size = s;
+    $$('#size button').forEach(b => b.classList.toggle('on', b.dataset.size === s));
+    refreshSlots();
+  }
+
+  function handleCode(raw) {
+    const c = classifyCode(raw);
+    code.value = '';
+    if (c.type === 'slot') return chooseSlot(c.value);
+    if (c.type === 'leitcode') {
+      draft.leitcode = c.value;
+      feedback();
+      $('#codeinfo').innerHTML = `<span class="warn">Das war der <b>Leitcode</b> (Adresse). Ist gemerkt. Jetzt bitte die <b>Sendungsnummer</b> scannen (meist der untere Code bzw. „JJD…“/„00340…“).</span>`;
+      return code.focus();
+    }
+    if (c.type === 'unknown') {
+      $('#codeinfo').innerHTML = `<span class="error">Code nicht erkannt: ${esc(c.value || raw)}</span>`;
+      return code.focus();
+    }
+    const existing = store.findStoredByTracking(c.value);
+    if (existing) {
+      $('#codeinfo').innerHTML = `<span class="error">Schon eingelagert: ${esc(existing.name)} in <b>${esc(existing.slotId)}</b> (seit ${fmtDateTime(existing.inAt)}).</span>`;
+      return code.focus();
+    }
+    draft.tracking = c.value;
+    draft.carrier = c.carrier;
+    // Foto mit mehreren Codes: Leitcode gleich mitnehmen
+    const leit = lastScanAll.map(classifyCode).find(x => x.type === 'leitcode');
+    if (leit && !draft.leitcode) draft.leitcode = leit.value;
+    feedback();
+    $('#codeinfo').innerHTML = `✓ <b>${esc(c.value)}</b> <span class="muted">${esc(c.carrier)}${draft.leitcode ? ' · Adresse erfasst' : ''}</span>`;
+    name.focus();
+  }
+
+  function chooseSlot(id) {
+    if (!store.getSlot(id)) return toast(`Lagerplatz ${id} gibt es nicht.`, { type: 'error' });
+    draft.slotId = id;
+    draft.autoSlot = false;
+    feedback();
+    refreshSlots();
+    $('#save').focus();
+  }
+
+  bindScanField(code, $('#cam1'), handleCode, 'Sendungsnummer scannen');
+  $('#cam2').onclick = async () => {
+    const v = await scanWithCamera('QR-Code am Lagerplatz scannen');
+    if (!v) return;
+    const c = classifyCode(v);
+    c.type === 'slot' ? chooseSlot(c.value) : toast('Das ist kein Lagerplatz-QR.', { type: 'error' });
+  };
+
+  name.addEventListener('input', () => {
+    draft.name = name.value;
+    // Handscanner im Namensfeld? → als Code behandeln
+    if (name.value.toUpperCase().startsWith(SLOT_PREFIX)) return;
+    $('#names').innerHTML = store.knownNames(name.value).map(n => `<option value="${esc(n)}">`).join('');
+    const stored = name.value.trim().length >= 3 ? store.search(name.value).exact : [];
+    $('#nameinfo').innerHTML = stored.length
+      ? `Schon im Lager für diesen Namen: ${stored.map(p => `<b>${esc(p.name)}</b> in ${esc(p.slotId)}`).join(', ')}`
+      : '';
+    refreshSlots();
+  });
+  name.addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const c = classifyCode(name.value);
+    if (c.type === 'slot') { name.value = draft.name; return chooseSlot(c.value); }
+    slot.focus();
+  });
+  // Ein Platz-QR, gescannt während der Fokus auf der Auswahl liegt
+  slot.addEventListener('change', () => { draft.slotId = slot.value; draft.autoSlot = false; refreshSlots(); });
+  $$('#size button').forEach(b => b.onclick = () => setSize(b.dataset.size));
+
+  // Scanner tippt in ein beliebiges Feld? Platz-QR global abfangen.
+  let buf = '', bufTimer;
+  main.addEventListener('keydown', e => {
+    if (e.target === code || e.target === name) return;
+    if (e.key === 'Enter' && buf.toUpperCase().startsWith(SLOT_PREFIX)) { e.preventDefault(); chooseSlot(classifyCode(buf).value); buf = ''; return; }
+    if (e.key.length === 1) { buf += e.key; clearTimeout(bufTimer); bufTimer = setTimeout(() => (buf = ''), 300); }
+  });
+
+  $('#f').onsubmit = async e => {
+    e.preventDefault();
+    if (code.value.trim()) return handleCode(code.value.trim());
+    draft.name = name.value.trim();
+    draft.slotId = slot.value;
+    if (!draft.tracking) { toast('Bitte zuerst die Sendungsnummer scannen.', { type: 'error' }); return code.focus(); }
+    if (!draft.name) { toast('Bitte den Namen eingeben.', { type: 'error' }); return name.focus(); }
+    if (!draft.slotId) { toast('Bitte einen Lagerplatz wählen.', { type: 'error' }); return slot.focus(); }
+    const s = store.getSlot(draft.slotId);
+    if (store.slotUsage(s.id) + store.SIZE_UNITS[draft.size] > s.capacity &&
+        !(await confirmDialog(`Platz ${s.id} ist eigentlich voll. Trotzdem einlagern?`, { ok: 'Trotzdem einlagern' }))) return;
+    try {
+      const p = store.checkIn(user.id, draft);
+      toast(`Eingelagert: ${p.name} → ${p.slotId}`, { action: 'Rückgängig', onAction: () => { store.cancelCheckIn(user.id, p.id); viewEin(); } });
+      resetDraft();
+      viewEin();
+    } catch (err) { toast(err.message, { type: 'error' }); }
+  };
+
+  // Zustand wiederherstellen (nach Re-Render)
+  name.value = draft.name;
+  if (draft.tracking) $('#codeinfo').innerHTML = `✓ <b>${esc(draft.tracking)}</b>`;
+  setSize(draft.size);
+  renderRecent();
+  (draft.tracking ? name : code).focus();
+}
+
+function renderRecent() {
+  const recent = store.storedParcels().slice().sort((a, b) => b.inAt.localeCompare(a.inAt)).slice(0, 6);
+  $('#recent').innerHTML = recent.length
+    ? `<ul class="list">${recent.map(p => `<li><span class="slot-badge">${esc(p.slotId)}</span><span class="grow">${esc(p.name)}</span><span class="muted">${fmtDateTime(p.inAt)}</span></li>`).join('')}</ul>`
+    : '<p class="muted">Noch nichts eingelagert.</p>';
+}
+
+// ---------------- Ausgabe ----------------
+
+function viewAus() {
+  main.innerHTML = `
+    <section class="card">
+      <h2>Paket ausgeben</h2>
+      <div class="scanrow">
+        <input id="q" placeholder="Karte/App scannen, Sendungsnummer oder Name" autofocus autocomplete="off">
+        <button type="button" class="btn icon" id="cam" title="Mit Kamera scannen" aria-label="Mit Kamera scannen">${icon('scan')}</button>
+      </div>
+      <p class="muted small">${TEST_APP ? 'Probier mal „abr“, „cali“ oder „don“.' : 'Tipp: Name tippen genügt, z. B. „schm“ oder „müller j“.'} Ausweis prüfen nicht vergessen.</p>
+    </section>
+    <div id="results"></div>`;
+  const q = $('#q');
+  let timer;
+  const run = (raw, fromScan = false) => {
+    clearTimeout(timer);
+    const c = classifyCode(raw);
+    const res = store.search(raw, c.type !== 'unknown' ? c : null);
+    showResults(res, raw);
+    if (fromScan) { q.value = raw; q.select(); feedback(); } // nächster Scan überschreibt
+  };
+  q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => run(q.value), 150); });
+  bindScanField(q, $('#cam'), v => run(v, true), 'Karte oder App-Code scannen');
+  q.focus();
+}
+
+function parcelCard(p, { actions = true } = {}) {
+  const days = store.daysStored(p);
+  const overdue = store.dueDate(p) < new Date();
+  return `
+    <article class="parcel ${overdue ? 'overdue' : ''}" data-id="${p.id}">
+      <div class="where"><span class="label">Platz</span><span class="slot-big">${esc(p.slotId)}</span><span class="muted small">${esc(store.getSlot(p.slotId)?.label ?? '')}</span></div>
+      <div class="what">
+        <div class="pname">${esc(p.name)}</div>
+        <div class="muted small">${esc(shortTracking(p.tracking))} · ${store.SIZE_LABEL[p.size]} · seit ${fmtDate(p.inAt)} (${days} ${days === 1 ? 'Tag' : 'Tage'})</div>
+        ${overdue ? `<div class="warn small">Frist abgelaufen am ${fmtDate(store.dueDate(p))}</div>` : ''}
+      </div>
+      ${actions ? `<button class="btn primary" data-out="${p.id}">Ausgeben</button>` : ''}
+    </article>`;
+}
+
+function showResults({ exact, related }, query) {
+  const box = $('#results');
+  if (!query || query.trim().length < 2) { box.innerHTML = ''; return; }
+  if (!exact.length) { box.innerHTML = `<section class="card"><p>Kein lagerndes Paket gefunden für „${esc(query)}“.</p></section>`; return; }
+  box.innerHTML = `
+    <section class="card">
+      <div class="row-between"><h2>${exact.length} Treffer</h2>
+        ${exact.length > 1 ? `<button class="btn outline" id="allout">Alle ${exact.length} ausgeben</button>` : ''}</div>
+      ${exact.map(p => parcelCard(p)).join('')}
+      ${related.length ? `<h3>Gleiche Adresse – vielleicht gleich mitnehmen?</h3>${related.map(p => parcelCard(p)).join('')}` : ''}
+    </section>`;
+  $$('[data-out]', box).forEach(b => b.onclick = () => doOut([b.dataset.out], query));
+  $('#allout')?.addEventListener('click', () => doOut(exact.map(p => p.id), query));
+}
+
+function doOut(ids, query) {
+  ids.forEach(id => store.checkOut(user.id, id));
+  toast(`${ids.length === 1 ? 'Paket' : ids.length + ' Pakete'} ausgegeben.`, {
+    action: 'Rückgängig',
+    onAction: () => { ids.forEach(id => store.undoCheckOut(user.id, id)); viewAus(); },
+  });
+  viewAus();
+}
+
+// ---------------- Bestand ----------------
+
+function viewBestand() {
+  const now = new Date();
+  main.innerHTML = `
+    <section class="card">
+      <div class="row-between"><h2>Im Lager</h2><button class="btn outline" id="print">${icon('drucken')}Rücksendeliste</button></div>
+      <div class="filters">
+        <input id="q" placeholder="Filtern nach Name, Nummer, Platz">
+        <div class="seg" id="mode"><button data-m="alle">Alle</button><button data-m="frist">Frist abgelaufen</button><button data-m="bald">Läuft bald ab</button></div>
+      </div>
+      <div id="tbl"></div>
+    </section>`;
+  let mode = location.hash === '#ruecksendungen' ? 'frist' : 'alle';
+  $$('#mode button').forEach(x => x.classList.toggle('on', x.dataset.m === mode));
+  const draw = () => {
+    const q = $('#q').value.trim().toLowerCase();
+    let rows = store.storedParcels().slice().sort((a, b) => a.inAt.localeCompare(b.inAt));
+    if (mode === 'frist') rows = rows.filter(p => store.dueDate(p) < now);
+    if (mode === 'bald') rows = rows.filter(p => { const d = store.dueDate(p); return d >= now && d - now < 2 * 86400000; });
+    if (q) rows = rows.filter(p => (p.name + ' ' + p.tracking + ' ' + p.slotId).toLowerCase().includes(q));
+    const slotOpts = store.listSlots().map(s => `<option value="${esc(s.id)}">${esc(s.id)}</option>`).join('');
+    $('#tbl').innerHTML = rows.length ? `
+      <div class="table-wrap"><table>
+        <thead><tr><th>Platz</th><th>Name</th><th>Sendung</th><th>Seit</th><th>Frist</th><th></th></tr></thead>
+        <tbody>${rows.map(p => {
+          const due = store.dueDate(p);
+          return `<tr class="${due < now ? 'overdue' : ''}">
+            <td><select data-move="${p.id}" aria-label="Umlagern">${slotOpts.replace(`value="${esc(p.slotId)}"`, `value="${esc(p.slotId)}" selected`)}</select></td>
+            <td>${esc(p.name)}</td><td class="mono">${esc(shortTracking(p.tracking))}</td>
+            <td>${fmtDate(p.inAt)}</td><td>${fmtDate(due)}</td>
+            <td><button class="btn small" data-ret="${p.id}">Retoure</button></td></tr>`;
+        }).join('')}</tbody></table></div>
+      <p class="muted small">${rows.length} Pakete</p>` : '<p class="muted">Keine Pakete.</p>';
+    $$('[data-move]').forEach(s => s.onchange = () => { store.moveParcel(user.id, s.dataset.move, s.value); toast(`Umgelagert nach ${s.value}`); });
+    $$('[data-ret]').forEach(b => b.onclick = () => {
+      const id = b.dataset.ret;
+      store.checkOut(user.id, id, 'retoure');
+      toast('Als Retoure gebucht.', { action: 'Rückgängig', onAction: () => { store.undoCheckOut(user.id, id); draw(); } });
+      draw();
+    });
+  };
+  $('#q').oninput = draw;
+  $$('#mode button').forEach(b => b.onclick = () => { mode = b.dataset.m; $$('#mode button').forEach(x => x.classList.toggle('on', x === b)); draw(); });
+  $('#print').onclick = () => {
+    const rows = store.storedParcels().filter(p => store.dueDate(p) < now).sort((a, b) => a.slotId.localeCompare(b.slotId, 'de', { numeric: true }));
+    printHtml(`<h1>Rücksendeliste ${now.toLocaleDateString('de-DE')}</h1>
+      <table class="print-table"><thead><tr><th>☐</th><th>Platz</th><th>Name</th><th>Sendungsnummer</th><th>Eingelagert</th></tr></thead>
+      <tbody>${rows.map(p => `<tr><td>☐</td><td><b>${esc(p.slotId)}</b></td><td>${esc(p.name)}</td><td>${esc(p.tracking)}</td><td>${fmtDate(p.inAt)}</td></tr>`).join('') || '<tr><td colspan="5">Keine Pakete mit abgelaufener Frist.</td></tr>'}</tbody></table>`);
+  };
+  draw();
+}
+
+function printHtml(html) {
+  if (inViewer()) return toast('Drucken geht in dieser Vorschau nicht, nur in der fertig installierten App.', { type: 'info' });
+  $('#print-area').innerHTML = html;
+  window.print();
+}
+
+// ---------------- Bericht (Chefin) ----------------
+
+function viewBericht() {
+  store.anonymizeOld();
+  const s = computeStats();
+  const avg = s.avgHours == null ? '–' : s.avgHours < 48 ? `${Math.round(s.avgHours)} Std.` : `${(s.avgHours / 24).toFixed(1).replace('.', ',')} Tage`;
+  const openHours = s.hours.filter(h => h.h >= 7 && h.h <= 20);
+  main.innerHTML = `
+    <section class="kpis">
+      <div class="kpi"><span class="kpi-v">${s.bestand}</span><span class="kpi-l">im Lager</span></div>
+      <div class="kpi ${s.ueberfaellig ? 'bad' : ''}"><span class="kpi-v">${s.ueberfaellig}</span><span class="kpi-l">Frist abgelaufen</span></div>
+      <div class="kpi"><span class="kpi-v">${s.heuteEin} / ${s.heuteAus}</span><span class="kpi-l">heute ein / aus</span></div>
+      <div class="kpi"><span class="kpi-v">${avg}</span><span class="kpi-l">Ø Liegezeit (30 Tage)</span></div>
+      <div class="kpi"><span class="kpi-v">${s.ausgegeben30}</span><span class="kpi-l">ausgegeben (30 Tage)</span></div>
+      <div class="kpi"><span class="kpi-v">${s.retoure30}</span><span class="kpi-l">Retouren (30 Tage)</span></div>
+    </section>
+    <section class="card">
+      <div class="row-between"><h2>Pakete pro Tag</h2>
+        <div class="legend"><span><i class="sw s1"></i>eingelagert</span><span><i class="sw s2"></i>ausgegeben</span></div></div>
+      ${dayChart(s.days)}
+    </section>
+    <div class="grid2">
+      <section class="card"><h2>Wann wird abgeholt?</h2><p class="muted small">Ausgaben je Uhrzeit, letzte 30 Tage – hilft bei der Personalplanung.</p>
+        ${barChart(openHours, { label: h => h.h + ' Uhr', value: h => h.n, ariaLabel: 'Ausgaben pro Stunde' })}</section>
+      <section class="card"><h2>Wie lange liegt der Bestand?</h2>
+        ${barChart(s.buckets, { label: b => b.label, value: b => b.n, ariaLabel: 'Liegedauer im Bestand' })}</section>
+    </div>
+    <section class="card">
+      <h2>Auslastung der Lagerplätze</h2>
+      <div class="slots">${s.slots.map(sl => slotBar(sl)).join('')}</div>
+    </section>
+    <section class="card">
+      <div class="row-between"><h2>Export & Protokoll</h2><button class="btn" id="csv">Excel-Export (CSV)</button></div>
+      <details><summary>Letzte Buchungen anzeigen</summary><div id="log"></div></details>
+    </section>`;
+  $('#csv').onclick = () => download(`pakete-${new Date().toISOString().slice(0, 10)}.csv`, parcelsCsv(), 'text/csv;charset=utf-8');
+  $('details').addEventListener('toggle', () => {
+    const labels = { einlagern: 'eingelagert', ausgabe: 'ausgegeben', retoure: 'Retoure', umlagern: 'umgelagert', rueckgaengig: 'rückgängig', login: 'angemeldet' };
+    const parcels = new Map(store.allParcels().map(p => [p.id, p]));
+    $('#log').innerHTML = `<ul class="list">${store.getLog().slice(-200).reverse().map(l => {
+      const p = parcels.get(l.parcelId);
+      return `<li><span class="muted">${fmtDateTime(l.at)}</span><span>${esc(store.userName(l.userId))}</span><span class="grow">${labels[l.action] ?? esc(l.action)} ${p ? esc(p.name) : ''} ${esc(l.detail)}</span></li>`;
+    }).join('')}</ul>`;
+  }, { once: true });
+}
+
+function slotBar(sl) {
+  const pct = Math.min(100, Math.round((sl.used / sl.capacity) * 100));
+  return `<div class="slotbar ${pct >= 100 ? 'full' : pct >= 75 ? 'high' : ''}">
+    <span class="slot-badge">${esc(sl.id)}</span>
+    <div class="bar"><i style="width:${pct}%"></i></div>
+    <span class="muted small">${sl.count} Pak. · ${pct}%</span></div>`;
+}
+
+// ---------------- Lagerplätze ----------------
+
+function viewPlaetze() {
+  const slots = store.listSlots(true);
+  main.innerHTML = `
+    <section class="card">
+      <div class="row-between"><h2>Alle Plätze</h2><button class="btn outline" id="printqr">${icon('drucken')}QR-Etiketten</button></div>
+      <p class="muted small">„Kapazität“ in Einheiten: klein = 1, mittel = 2, groß = 4. „Buchstaben“ ist optional, z. B. <code>A-C</code> oder <code>SCH</code>. Dann schlägt die App diese Box für passende Nachnamen zuerst vor.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th><input type="checkbox" id="all" checked aria-label="Alle"></th><th>Code</th><th>Bezeichnung</th><th>Buchstaben</th><th>Kapazität</th><th>Belegt</th><th>Aktiv</th></tr></thead>
+        <tbody>${slots.map(s => `<tr data-id="${esc(s.id)}" class="${s.active ? '' : 'inactive'}">
+          <td><input type="checkbox" class="sel" ${s.active ? 'checked' : ''} aria-label="Auswählen"></td>
+          <td><b>${esc(s.id)}</b></td>
+          <td><input data-f="label" value="${esc(s.label)}"></td>
+          <td><input data-f="letters" value="${esc(s.letters)}" size="6"></td>
+          <td><input data-f="capacity" type="number" min="1" value="${s.capacity}" style="width:5em"></td>
+          <td>${store.slotCount(s.id)} Pak.</td>
+          <td><input type="checkbox" data-f="active" ${s.active ? 'checked' : ''} aria-label="Aktiv"></td></tr>`).join('')}</tbody>
+      </table></div>
+    </section>
+    <div class="grid2">
+      <section class="card"><h2>Einzelnen Platz anlegen</h2>
+        <form id="one" class="stack">
+          <label>Code<input name="id" required placeholder="z. B. A oder REGAL-3" maxlength="12"></label>
+          <label>Bezeichnung<input name="label" placeholder="z. B. Box A–C, oben links"></label>
+          <label>Buchstaben (optional)<input name="letters" placeholder="A-C"></label>
+          <label>Kapazität<input name="capacity" type="number" min="1" value="8"></label>
+          <button class="btn primary">Anlegen</button>
+        </form></section>
+      <section class="card"><h2>Viele auf einmal</h2>
+        <form id="many" class="stack">
+          <label>Präfix<input name="prefix" required value="R" maxlength="6"></label>
+          <div class="row"><label>von<input name="from" type="number" value="1" min="1"></label><label>bis<input name="to" type="number" value="10" min="1"></label></div>
+          <label>Kapazität je Platz<input name="capacity" type="number" min="1" value="6"></label>
+          <p class="muted small">Ergibt z. B. R-01 … R-10</p>
+          <button class="btn primary">Anlegen</button>
+        </form></section>
+    </div>`;
+  $$('tr[data-id] [data-f]').forEach(inp => inp.onchange = () => {
+    const id = inp.closest('tr').dataset.id;
+    const f = inp.dataset.f;
+    if (f === 'active' && !inp.checked && store.slotCount(id) > 0) {
+      inp.checked = true;
+      return toast('Auf diesem Platz liegen noch Pakete.', { type: 'error' });
+    }
+    store.updateSlot(id, { [f]: f === 'active' ? inp.checked : inp.value });
+    toast('Gespeichert.');
+    if (f === 'active') viewPlaetze();
+  });
+  $('#all').onchange = e => $$('.sel').forEach(c => (c.checked = e.target.checked));
+  $('#one').onsubmit = e => {
+    e.preventDefault();
+    try { store.addSlot(Object.fromEntries(new FormData(e.target))); viewPlaetze(); toast('Platz angelegt.'); }
+    catch (err) { toast(err.message, { type: 'error' }); }
+  };
+  $('#many').onsubmit = e => {
+    e.preventDefault();
+    const { prefix, from, to, capacity } = Object.fromEntries(new FormData(e.target));
+    const a = +from, b = +to;
+    if (b < a || b - a > 200) return toast('Bitte einen sinnvollen Bereich (max. 200) angeben.', { type: 'error' });
+    const width = Math.max(2, String(b).length);
+    let n = 0;
+    for (let i = a; i <= b; i++) {
+      try { store.addSlot({ id: `${prefix.toUpperCase()}-${String(i).padStart(width, '0')}`, capacity }); n++; } catch { /* existiert */ }
+    }
+    toast(`${n} Plätze angelegt.`);
+    viewPlaetze();
+  };
+  $('#printqr').onclick = () => {
+    const ids = $$('tr[data-id]').filter(tr => $('.sel', tr).checked).map(tr => tr.dataset.id);
+    if (!ids.length) return toast('Bitte Plätze auswählen.', { type: 'error' });
+    printHtml(`<div class="labels">${ids.map(id => {
+      const s = store.getSlot(id);
+      return `<div class="qr-label">${qrSvg(SLOT_PREFIX + id)}<div><div class="qr-id">${esc(id)}</div><div class="qr-sub">${esc(s.label)}</div></div></div>`;
+    }).join('')}</div>`);
+  };
+}
+
+// ---------------- Team ----------------
+
+function viewTeam() {
+  const users = store.listUsers();
+  main.innerHTML = `
+    <section class="card">
+      <h2>Personen</h2>
+      <ul class="list">${users.map(u => `<li data-id="${u.id}" class="${u.active ? '' : 'inactive'}">
+        <span class="grow"><b>${esc(u.name)}</b> ${u.id === user.id ? '<span class="muted">(du)</span>' : ''}</span>
+        <select data-role aria-label="Rolle"><option value="staff" ${u.role === 'staff' ? 'selected' : ''}>Mitarbeiterin</option><option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Chefin/Admin</option></select>
+        <button class="btn small" data-pin>PIN neu</button>
+        <button class="btn small" data-active>${u.active ? 'Sperren' : 'Entsperren'}</button></li>`).join('')}</ul>
+    </section>
+    <section class="card narrow">
+      <h2>Neue Person</h2>
+      <form id="f" class="stack" autocomplete="off">
+        <label>Name<input name="name" required></label>
+        <label>Start-PIN (4–8 Ziffern)<input name="pin" required inputmode="numeric" pattern="\\d{4,8}"></label>
+        <label>Rolle<select name="role"><option value="staff">Mitarbeiterin</option><option value="admin">Chefin/Admin</option></select></label>
+        <button class="btn primary">Hinzufügen</button>
+      </form>
+    </section>`;
+  const wrap = fn => async (...a) => { try { await fn(...a); viewTeam(); } catch (err) { toast(err.message, { type: 'error' }); } };
+  $$('li[data-id]').forEach(li => {
+    const id = li.dataset.id;
+    $('[data-role]', li).onchange = wrap(e => store.setUserRole(id, e.target.value));
+    $('[data-pin]', li).onclick = wrap(async () => {
+      const pin = await askText('Neue PIN (4–8 Ziffern):', { numeric: true, ok: 'PIN speichern' });
+      if (pin) { await store.setPin(id, pin.trim()); toast('PIN geändert.'); }
+    });
+    $('[data-active]', li).onclick = wrap(() => {
+      const u = users.find(x => x.id === id);
+      store.setUserActive(id, !u.active);
+    });
+  });
+  $('#f').onsubmit = wrap(async e => {
+    e.preventDefault();
+    await store.addUser(Object.fromEntries(new FormData(e.target)));
+    toast('Person angelegt.');
+  });
+}
+
+// ---------------- Einstellungen ----------------
+
+function viewEinstellungen() {
+  const f = store.getFiliale();
+  main.innerHTML = `
+    <section class="card narrow">
+      <h2>Filiale</h2>
+      <form id="f" class="stack">
+        <label>Name der Filiale<input name="name" value="${esc(f.name)}"></label>
+        <label>Lagerfrist (Werktage Mo–Sa)<input name="lagerfristWerktage" type="number" min="1" max="30" value="${f.lagerfristWerktage}"></label>
+        <label>Namen löschen nach Abholung (Tage)<input name="loeschfristTage" type="number" min="1" max="365" value="${f.loeschfristTage}">
+          <span class="muted small">Datenschutz: Danach bleiben nur anonyme Zahlen für das Reporting.</span></label>
+        <button class="btn primary">Speichern</button>
+      </form>
+    </section>
+    <section class="card narrow">
+      <h2>Datensicherung</h2>
+      <p class="muted small">Der Prototyp speichert nur auf diesem Gerät. Bitte regelmäßig sichern. In der Mehrgeräte-Version entfällt das.</p>
+      <div class="row"><button class="btn" id="backup">Sicherung herunterladen</button>
+      <label class="btn">Sicherung einspielen<input type="file" id="restore" accept="application/json" hidden></label></div>
+    </section>
+    <section class="card narrow danger-zone">
+      <h2>Zurücksetzen</h2>
+      <button class="btn danger" id="reset">Alle Daten auf diesem Gerät löschen</button>
+    </section>`;
+  $('#f').onsubmit = e => {
+    e.preventDefault();
+    const d = Object.fromEntries(new FormData(e.target));
+    store.updateFiliale({ name: d.name.trim(), lagerfristWerktage: Math.max(1, +d.lagerfristWerktage), loeschfristTage: Math.max(1, +d.loeschfristTage) });
+    toast('Gespeichert.');
+    renderHeader('einstellungen');
+  };
+  $('#backup').onclick = () => download(`paketlager-sicherung-${new Date().toISOString().slice(0, 10)}.json`, store.exportBackup(), 'application/json');
+  $('#restore').onchange = async e => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file || !(await confirmDialog('Aktuelle Daten durch die Sicherung ersetzen?', { ok: 'Ersetzen', danger: true }))) return;
+    try { store.importBackup(await file.text()); setUser(null); toast('Sicherung eingespielt. Bitte neu anmelden.'); go('login'); }
+    catch (err) { toast(err.message, { type: 'error' }); }
+  };
+  $('#reset').onclick = async () => {
+    const word = await askText('Wirklich ALLE Daten (Pakete, Plätze, Team) auf diesem Gerät löschen? Zur Bestätigung LÖSCHEN eintippen:', { ok: 'Alles löschen', danger: true });
+    if (word?.toUpperCase() !== 'LÖSCHEN') { if (word != null) toast('Nicht gelöscht: Bestätigungswort stimmt nicht.', { type: 'info' }); return; }
+    store.resetAll(); setUser(null); go('setup');
+  };
+}
+
+// ---------------- Start ----------------
+
+if (TEST_APP && !store.isSetUp()) await store.setupTestApp();
+store.anonymizeOld();
+render();
+if ('serviceWorker' in navigator && location.protocol !== 'file:' && !inViewer()) {
+  navigator.serviceWorker.register('sw.js').catch(() => { /* offline-Modus optional */ });
+}
