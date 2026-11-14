@@ -6,7 +6,7 @@ import { computeStats, dayChart, barChart, parcelsCsv } from './report.js';
 import { icon } from './icons.js';
 
 const BRAND = 'Willbrandt und Kompagnon';
-const APP_VERSION = '6';
+const APP_VERSION = '7';
 const AUTO_LOGOUT_MIN = 20;
 // Test-App: wird von der Vorführseite gesetzt (window.PAKETLAGER_TEST = true)
 const TEST_APP = window.PAKETLAGER_TEST === true;
@@ -503,7 +503,7 @@ function viewAus() {
     if (fromScan) { q.value = raw; q.select(); feedback(); } // nächster Scan überschreibt
   };
   q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => run(q.value), 150); });
-  bindScanField(q, $('#cam'), v => run(v, true), 'Karte oder App-Code scannen');
+  bindScanField(q, $('#cam'), v => run(v, true), 'Karte oder App-Code scannen', { want: 'tracking', leitcodeAfterMs: 2500 });
   q.focus();
 }
 
@@ -525,7 +525,24 @@ function parcelCard(p, { actions = true } = {}) {
 function showResults({ exact, related }, query) {
   const box = $('#results');
   if (!query || query.trim().length < 2) { box.innerHTML = ''; return; }
-  if (!exact.length) { box.innerHTML = `<section class="card"><p>Kein lagerndes Paket gefunden für „${esc(query)}“.</p></section>`; return; }
+  if (!exact.length) {
+    const c = classifyCode(query);
+    const past = c.type === 'tracking' ? store.findAnyByTracking(c.value) : null;
+    const labels = { ausgegeben: 'ausgegeben', retoure: 'als Retoure zurückgeschickt' };
+    let html = `<p>Kein Paket im Lager für „${esc(query)}“.</p>`;
+    if (past && past.status !== 'lagernd') {
+      html = `<p><b>Dieses Paket ist nicht mehr im Lager.</b> Es wurde am ${fmtDateTime(past.outAt)} von ${esc(store.userName(past.outBy))} ${labels[past.status] ?? past.status}.</p>`;
+    } else if (c.type === 'tracking') {
+      html += `<p class="muted">Diese Sendungsnummer wurde hier nicht eingelagert.</p><button class="btn primary" id="toein">${icon('einlagern')}Jetzt einlagern</button>`;
+    }
+    box.innerHTML = `<section class="card">${html}</section>`;
+    $('#toein')?.addEventListener('click', () => {
+      resetDraft();
+      Object.assign(draft, { tracking: c.value, carrier: c.carrier });
+      go('ein');
+    });
+    return;
+  }
   box.innerHTML = `
     <section class="card">
       <div class="row-between"><h2>${exact.length} Treffer</h2>

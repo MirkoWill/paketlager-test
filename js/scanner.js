@@ -97,7 +97,7 @@ export let lastScanAll = [];
  * @param {{want?: 'tracking'|'slot'}} opts Gesuchte Code-Art: Die Live-Kamera scannt weiter,
  *   bis so ein Code im Bild ist (z. B. Leitcode merken, aber auf die Sendungsnummer warten).
  */
-export function scanWithCamera(title = 'Code scannen', { want } = {}) {
+export function scanWithCamera(title = 'Code scannen', { want, leitcodeAfterMs } = {}) {
   lastScanAll = [];
   return new Promise(resolve => {
     const overlay = document.createElement('div');
@@ -127,7 +127,7 @@ export function scanWithCamera(title = 'Code scannen', { want } = {}) {
       if (value) feedback();
       resolve(value || null);
     }
-    let hinted = '';
+    let hinted = '', leitSeenAt = 0;
     /** Neue Live-Treffer prüfen: fertig, sobald die gesuchte Code-Art dabei ist. */
     function consider(values) {
       for (const v of values) if (!lastScanAll.includes(v)) lastScanAll.push(v);
@@ -135,6 +135,11 @@ export function scanWithCamera(title = 'Code scannen', { want } = {}) {
       const hit = lastScanAll.find(v => classifyCode(v).type === want);
       if (hit) return finish(hit);
       const types = lastScanAll.map(v => classifyCode(v).type);
+      // Optional: nur Adresse im Bild? Nach kurzer Zeit damit weitermachen (Suche nach Adresse)
+      if (leitcodeAfterMs && types.includes('leitcode')) {
+        leitSeenAt ||= Date.now();
+        if (Date.now() - leitSeenAt > leitcodeAfterMs) return finish(lastScanAll.find(v => classifyCode(v).type === 'leitcode'));
+      }
       let text = '';
       if (want === 'tracking' && types.includes('leitcode')) text = 'Adresse erkannt ✓ Jetzt den Code mit der Sendungsnummer (JJD… oder 00340…) in den Rahmen halten.';
       else if (want === 'tracking' && types.includes('slot')) text = 'Das ist ein Lagerplatz. Bitte den Code mit der Sendungsnummer scannen.';

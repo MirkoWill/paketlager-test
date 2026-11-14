@@ -251,6 +251,13 @@ export function search(query, classified) {
   return { exact, related: exact.length ? related(exact) : [] };
 }
 
+/** Letzter Eintrag zu einer Sendungsnummer, egal ob noch im Lager oder schon abgeschlossen. */
+export function findAnyByTracking(value) {
+  const key = trackingKey(value);
+  for (let i = state.parcels.length - 1; i >= 0; i--) if (state.parcels[i].trackingKey === key) return state.parcels[i];
+  return null;
+}
+
 /** Weitere Pakete für denselben Namen bzw. dieselbe Adresse. */
 function related(hits) {
   const ids = new Set(hits.map(p => p.id));
