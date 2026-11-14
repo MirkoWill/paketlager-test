@@ -1,6 +1,6 @@
 // Offline-Fähigkeit: App-Dateien werden zwischengespeichert.
 // Bei jeder Änderung an der App VERSION erhöhen.
-const VERSION = 'paketlager-v5';
+const VERSION = 'paketlager-v6';
 const FILES = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
   'js/app.js', 'js/icons.js', 'js/store.js', 'js/barcode.js', 'js/scanner.js', 'js/report.js',
@@ -22,7 +22,8 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET' || new URL(e.request.url).origin !== location.origin) return;
   e.respondWith(
-    fetch(e.request)
+    // immer beim Server nachfragen (kein veralteter Browser-Cache), offline aus dem eigenen Cache
+    fetch(new Request(e.request.url, { cache: 'no-cache', credentials: 'same-origin' }))
       .then(res => { const copy = res.clone(); caches.open(VERSION).then(c => c.put(e.request, copy)); return res; })
       .catch(() => caches.match(e.request, { ignoreSearch: true })),
   );

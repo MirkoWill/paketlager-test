@@ -6,6 +6,7 @@ import { computeStats, dayChart, barChart, parcelsCsv } from './report.js';
 import { icon } from './icons.js';
 
 const BRAND = 'Willbrandt und Kompagnon';
+const APP_VERSION = '6';
 const AUTO_LOGOUT_MIN = 20;
 // Test-App: wird von der Vorführseite gesetzt (window.PAKETLAGER_TEST = true)
 const TEST_APP = window.PAKETLAGER_TEST === true;
@@ -832,6 +833,7 @@ if (TEST_APP && !store.isSetUp()) await store.setupTestApp();
 if (TEST_APP && !store.getSlot('A3')) store.addSlot({ id: 'A3', label: 'Regal A, Fach 3', capacity: 10 });
 store.anonymizeOld();
 render();
+try { $('.footer').textContent += ` · Version ${APP_VERSION}`; } catch { /* egal */ }
 if ('serviceWorker' in navigator && location.protocol !== 'file:' && !inViewer()) {
   navigator.serviceWorker.register('sw.js').catch(() => { /* offline-Modus optional */ });
 }
