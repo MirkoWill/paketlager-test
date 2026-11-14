@@ -176,11 +176,11 @@ export function findStoredByTracking(value) {
   return state.parcels.find(p => p.status === 'lagernd' && p.trackingKey === key) ?? null;
 }
 
-export function checkIn(userId, { tracking, carrier, leitcode, name, size, slotId, note = '' }) {
+export function checkIn(userId, { tracking, carrier, leitcode, name, size, slotId, note = '' }, { allowDuplicate = false } = {}) {
   if (!tracking) throw new Error('Sendungsnummer fehlt.');
   if (!name?.trim()) throw new Error('Name fehlt.');
   if (!getSlot(slotId)) throw new Error('Bitte einen gültigen Lagerplatz wählen.');
-  if (findStoredByTracking(tracking)) throw new Error('Dieses Paket ist bereits eingelagert.');
+  if (!allowDuplicate && findStoredByTracking(tracking)) throw new Error('Dieses Paket ist bereits eingelagert.');
   const p = {
     id: uid(), tracking, trackingKey: trackingKey(tracking), carrier: carrier || '', leitcode: leitcode || null,
     name: name.trim(), nameKey: normalizeName(name), size: size || 'M', slotId, note,

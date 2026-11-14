@@ -375,7 +375,7 @@ function viewEin() {
       return code.focus();
     }
     const existing = store.findStoredByTracking(c.value);
-    if (existing) {
+    if (existing && !TEST_APP) {
       $('#codeinfo').innerHTML = `<span class="error">Schon eingelagert: ${esc(existing.name)} in <b>${esc(existing.slotId)}</b> (seit ${fmtDateTime(existing.inAt)}).</span>`;
       return code.focus();
     }
@@ -386,6 +386,8 @@ function viewEin() {
     if (leit && !draft.leitcode) draft.leitcode = leit.value;
     feedback();
     $('#codeinfo').innerHTML = `✓ <b>${esc(c.value)}</b> <span class="muted">${esc(c.carrier)}${draft.leitcode ? ' · Adresse erfasst' : ''}</span>`;
+    // Test-App: dasselbe Paket darf mehrfach eingelagert werden, damit man mit einem Label üben kann
+    if (existing) $('#codeinfo').innerHTML += `<br><span class="muted small">Test-App: liegt schon in ${esc(existing.slotId)}, wird trotzdem noch einmal eingelagert.</span>`;
     name.focus();
   }
 
@@ -448,7 +450,7 @@ function viewEin() {
     if (store.slotUsage(s.id) + store.SIZE_UNITS[draft.size] > s.capacity &&
         !(await confirmDialog(`Platz ${s.id} ist eigentlich voll. Trotzdem einlagern?`, { ok: 'Trotzdem einlagern' }))) return;
     try {
-      const p = store.checkIn(user.id, draft);
+      const p = store.checkIn(user.id, draft, { allowDuplicate: TEST_APP });
       toast(`Eingelagert: ${p.name} → ${p.slotId}`, { action: 'Rückgängig', onAction: () => { store.cancelCheckIn(user.id, p.id); viewEin(); } });
       resetDraft();
       viewEin();
