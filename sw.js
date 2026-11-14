@@ -1,6 +1,6 @@
 // Offline-Fähigkeit: App-Dateien werden zwischengespeichert.
 // Bei jeder Änderung an der App VERSION erhöhen.
-const VERSION = 'paketlager-v3';
+const VERSION = 'paketlager-v4';
 const FILES = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
   'js/app.js', 'js/icons.js', 'js/store.js', 'js/barcode.js', 'js/scanner.js', 'js/report.js',

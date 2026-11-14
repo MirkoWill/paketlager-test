@@ -391,8 +391,13 @@ function viewEin() {
     name.focus();
   }
 
-  function chooseSlot(id) {
-    if (!store.getSlot(id)) return toast(`Lagerplatz ${id} gibt es nicht.`, { type: 'error' });
+  async function chooseSlot(id) {
+    if (!store.getSlot(id)) {
+      if (!(TEST_APP || user.role === 'admin')) return toast(`Lagerplatz ${id} ist noch nicht angelegt. Bitte die Chefin, ihn anzulegen.`, { type: 'error' });
+      if (!(await confirmDialog(`Lagerplatz ${id} gibt es noch nicht. Jetzt anlegen?`, { ok: `${id} anlegen` }))) return;
+      try { store.addSlot({ id, label: '', capacity: 8 }); toast(`Lagerplatz ${id} angelegt.`); }
+      catch (err) { return toast(err.message, { type: 'error' }); }
+    }
     draft.slotId = id;
     draft.autoSlot = false;
     feedback();
