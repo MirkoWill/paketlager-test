@@ -174,7 +174,8 @@ export function scanWithCamera(title = 'Code scannen', { want, leitcodeAfterMs }
       if (!file) return;
       msg.textContent = 'Lese Code aus dem Foto …';
       const values = await decodeImage(file);
-      if (values.length) { lastScanAll = values; finish(pickBest(values)); }
+      // wie im Live-Modus: nur die gesuchte Code-Art übernehmen (z. B. Sendungsnummer statt Box-QR)
+      if (values.length) consider(values);
       else msg.textContent = 'Kein Code erkannt. Bitte näher ran, gerade halten und erneut versuchen.';
     };
 

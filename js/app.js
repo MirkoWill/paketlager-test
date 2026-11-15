@@ -6,7 +6,7 @@ import { computeStats, dayChart, barChart, parcelsCsv } from './report.js';
 import { icon } from './icons.js';
 
 const BRAND = 'Willbrandt und Kompagnon';
-const APP_VERSION = '15';
+const APP_VERSION = '16';
 const AUTO_LOGOUT_MIN = 20;
 // Test-App: wird von der Vorführseite gesetzt (window.PAKETLAGER_TEST = true)
 const TEST_APP = window.PAKETLAGER_TEST === true;
