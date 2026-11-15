@@ -335,3 +335,9 @@ details summary { cursor: pointer; color: var(--olive); font-weight: 600; paddin
 .scan-actions { display: flex; gap: .4rem; }
 [data-torch][aria-pressed="true"] { background: var(--lime); color: var(--hero-bg); }
 input[type="search"]::-webkit-search-cancel-button { cursor: pointer; }
+
+/* Ausgabe: Rückmeldung nach dem Ausgeben */
+.ok-note { display: flex; align-items: center; justify-content: space-between; gap: .6rem; margin: 0 0 .8rem; padding: .6rem .9rem; border-radius: var(--radius-sm); background: var(--ok-bg); color: var(--ok); font-weight: 700; }
+.done-all { text-align: center; }
+.big-ok { font-family: var(--serif); font-size: 1.6rem; color: var(--ok); margin: .2rem 0 .3rem; }
+.ok-note .btn, .done-all .btn { color: inherit; border-color: currentColor; }

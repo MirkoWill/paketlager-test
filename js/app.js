@@ -6,7 +6,7 @@ import { computeStats, dayChart, barChart, parcelsCsv } from './report.js';
 import { icon } from './icons.js';
 
 const BRAND = 'Willbrandt und Kompagnon';
-const APP_VERSION = '13';
+const APP_VERSION = '14';
 const AUTO_LOGOUT_MIN = 20;
 // Test-App: wird von der Vorführseite gesetzt (window.PAKETLAGER_TEST = true)
 const TEST_APP = window.PAKETLAGER_TEST === true;
@@ -573,10 +573,14 @@ function parcelCard(p, { actions = true } = {}) {
     </article>`;
 }
 
+// Die gerade angezeigten Treffer. Nach dem Ausgeben bleiben die übrigen stehen,
+// damit man ein zweites Paket derselben Person ohne neue Suche ausgeben kann.
+let shown = { exact: [], related: [], query: '' };
+
 function showResults({ exact, related }, query) {
   const box = $('#results');
   if (!query || query.trim().length < 2) { box.innerHTML = ''; return; }
-  if (!exact.length) {
+  if (!exact.length && !related.length) {
     const c = classifyCode(query);
     const past = c.type === 'tracking' ? store.findAnyByTracking(c.value) : null;
     const labels = { ausgegeben: 'ausgegeben', retoure: 'als Retoure zurückgeschickt' };
@@ -594,25 +598,50 @@ function showResults({ exact, related }, query) {
     });
     return;
   }
-  box.innerHTML = `
-    <section class="card">
-      <div class="row-between"><h2>${exact.length === 1 ? '1 Paket' : exact.length + ' Pakete'}</h2>
-        ${exact.length > 1 ? `<button class="btn outline" id="allout">Alle ${exact.length} ausgeben</button>` : ''}</div>
-      <p class="hint">Vor der Ausgabe den Ausweis prüfen.</p>
-      ${exact.map(p => parcelCard(p)).join('')}
-      ${related.length ? `<h3>Gleiche Adresse – vielleicht gleich mitnehmen?</h3>${related.map(p => parcelCard(p)).join('')}` : ''}
-    </section>`;
-  $$('[data-out]', box).forEach(b => b.onclick = () => doOut([b.dataset.out], query));
-  $('#allout')?.addEventListener('click', () => doOut(exact.map(p => p.id), query));
+  shown = { exact: exact.map(p => p.id), related: related.map(p => p.id), query };
+  renderShown();
 }
 
-function doOut(ids, query) {
+function renderShown(note = '', undoIds = null) {
+  const box = $('#results');
+  if (!box) return;
+  const still = ids => ids.map(id => store.allParcels().find(p => p.id === id)).filter(p => p && p.status === 'lagernd');
+  const exact = still(shown.exact), related = still(shown.related);
+  if (!exact.length && !related.length) {
+    box.innerHTML = `<section class="card done-all"><p class="big-ok">✓ Alles ausgegeben</p><p class="hint">Bereit für die nächste Kundin.</p>
+      ${undoIds ? '<button type="button" class="btn small ghost" id="undoout">Rückgängig</button>' : ''}</section>`;
+    const q = $('#q');
+    if (q) { q.value = ''; q.focus(); }
+    $('#undoout')?.addEventListener('click', () => undoOut(undoIds));
+    return;
+  }
+  box.innerHTML = `
+    <section class="card">
+      ${note ? `<p class="ok-note"><span>${note}</span>${undoIds ? '<button type="button" class="btn small ghost" id="undoout">Rückgängig</button>' : ''}</p>` : ''}
+      ${exact.length ? `
+        <div class="row-between"><h2>${exact.length === 1 ? '1 Paket' : exact.length + ' Pakete'}${note ? ' übrig' : ''}</h2>
+          ${exact.length > 1 ? `<button class="btn outline" id="allout">Alle ${exact.length} ausgeben</button>` : ''}</div>
+        <p class="hint">Vor der Ausgabe den Ausweis prüfen.</p>
+        ${exact.map(p => parcelCard(p)).join('')}` : ''}
+      ${related.length ? `<h3>Gleiche Adresse – vielleicht gleich mitnehmen?</h3>${related.map(p => parcelCard(p)).join('')}` : ''}
+    </section>`;
+  $$('[data-out]', box).forEach(b => b.onclick = () => doOut([b.dataset.out]));
+  $('#allout')?.addEventListener('click', () => doOut(exact.map(p => p.id)));
+  $('#undoout')?.addEventListener('click', () => undoOut(undoIds));
+}
+
+function undoOut(ids) {
+  ids.forEach(id => store.undoCheckOut(user.id, id));
+  const q = $('#q');
+  if (q && !q.value) q.value = shown.query;
+  renderShown();
+}
+
+function doOut(ids) {
   ids.forEach(id => store.checkOut(user.id, id));
-  toast(`✓ ${ids.length === 1 ? 'Paket' : ids.length + ' Pakete'} ausgegeben`, {
-    action: 'Rückgängig',
-    onAction: () => { ids.forEach(id => store.undoCheckOut(user.id, id)); viewAus(); },
-  });
-  viewAus();
+  const what = ids.length === 1 ? 'Paket' : ids.length + ' Pakete';
+  feedback();
+  renderShown(`✓ ${what} ausgegeben`, ids);
 }
 
 // ---------------- Bestand ----------------
