@@ -129,11 +129,12 @@ export const listSlots = (all = false) =>
 
 export const getSlot = id => state.slots.find(s => s.id === id);
 
-export function addSlot({ id, label = '' }) {
+/** noOrder: Bodenfläche o. Ä. – dort wird keine Reihenfolge gezählt. */
+export function addSlot({ id, label = '', noOrder = false }) {
   id = String(id).trim().toUpperCase();
   if (!/^[A-Z0-9\-]{1,12}$/.test(id)) throw new Error('Platz-Code: nur Buchstaben, Ziffern und Bindestrich (max. 12).');
   if (state.slots.some(s => s.id === id)) throw new Error(`Platz ${id} gibt es schon.`);
-  state.slots.push({ id, label: String(label).trim(), active: true });
+  state.slots.push({ id, label: String(label).trim(), active: true, noOrder: !!noOrder });
   save();
 }
 
@@ -144,6 +145,41 @@ export function updateSlot(id, patch) {
 
 export function slotCount(id) {
   return state.parcels.filter(p => p.status === 'lagernd' && p.slotId === id).length;
+}
+
+// ---------- Reihenfolge in der Box ----------
+// Pakete kommen immer hinten in die Box. Wer zuerst hineingelegt wurde, liegt vorne.
+// Wird ein Paket entnommen, rücken die übrigen automatisch auf – die Position wird
+// deshalb nie gespeichert, sondern jedes Mal aus dem Einlegezeitpunkt berechnet.
+
+const placed = p => p.placedAt || p.inAt;
+
+/** Pakete einer Box von vorne nach hinten. */
+export function slotOrder(slotId) {
+  return state.parcels
+    .filter(p => p.status === 'lagernd' && p.slotId === slotId)
+    .sort((a, b) => placed(a).localeCompare(placed(b)));
+}
+
+/** 1 = ganz vorne. null bei Plätzen ohne Reihenfolge (z. B. Bodenfläche). */
+export function positionOf(p) {
+  const slot = getSlot(p.slotId);
+  if (!slot || slot.noOrder) return null;
+  return slotOrder(p.slotId).indexOf(p) + 1 || null;
+}
+
+/** Reihenfolge korrigieren: Paket eine Stelle nach vorne (-1) oder hinten (+1). */
+export function shiftOrder(userId, parcelId, dir) {
+  const p = state.parcels.find(x => x.id === parcelId);
+  const list = slotOrder(p.slotId);
+  const i = list.indexOf(p), j = i + dir;
+  if (i < 0 || j < 0 || j >= list.length) return;
+  const other = list[j];
+  const a = placed(p), b = placed(other);
+  p.placedAt = b; other.placedAt = a;
+  if (p.placedAt === other.placedAt) p.placedAt = new Date(new Date(b).getTime() + dir).toISOString();
+  log(userId, 'reihenfolge', p.id, `${p.slotId}: ${i + 1} → ${j + 1}`);
+  save();
 }
 
 // ---------- Pakete ----------
@@ -161,7 +197,7 @@ export function checkIn(userId, { tracking, carrier, leitcode, name, slotId, not
   const p = {
     id: uid(), tracking, trackingKey: trackingKey(tracking), carrier: carrier || '', leitcode: leitcode || null,
     name: name.trim(), nameKey: normalizeName(name), slotId, note,
-    status: 'lagernd', inAt: new Date().toISOString(), inBy: userId, outAt: null, outBy: null,
+    status: 'lagernd', inAt: new Date().toISOString(), placedAt: new Date().toISOString(), inBy: userId, outAt: null, outBy: null,
   };
   state.parcels.push(p);
   log(userId, 'einlagern', p.id, slotId);
@@ -173,6 +209,7 @@ export function moveParcel(userId, parcelId, slotId) {
   const p = state.parcels.find(x => x.id === parcelId);
   const from = p.slotId;
   p.slotId = slotId;
+  p.placedAt = new Date().toISOString(); // in der neuen Box ganz hinten
   log(userId, 'umlagern', p.id, `${from} → ${slotId}`);
   save();
 }
@@ -324,7 +361,7 @@ export function resetAll() {
 }
 
 /** Stand der Testdaten. Erhöhen, damit alle Test-Geräte beim nächsten Öffnen frisch starten. */
-export const TEST_DATA_VERSION = 4;
+export const TEST_DATA_VERSION = 5;
 export const testDataVersion = () => state.testDataVersion ?? 1;
 
 /** Test-App: Filiale, Team und Testdaten auf einen Schlag. */
@@ -342,13 +379,14 @@ export function seedDemo(userId) {
   for (const r of ['A', 'B']) for (let n = 1; n <= 4; n++) {
     if (!getSlot(r + n)) addSlot({ id: r + n, label: `Regal ${r}, Box ${n}` });
   }
+  if (!getSlot('BODEN')) addSlot({ id: 'BODEN', label: 'Bodenfläche, große Pakete', noOrder: true });
   // Testkunden: die Abrafaxe. Abrax, Brabax und Califax wohnen zusammen (gleicher Leitcode),
   // so zeigt die Ausgabe auch „gleiche Adresse“.
   const ZUHAUSE = '13051014003571', BURG = '13051088001572';
   const kunden = [ // Name, Box, Tage im Lager, Adresse (Leitcode)
     ['Don Ferrando', 'B4', 9.3, BURG], ['Califax', 'A1', 8.6, ZUHAUSE], ['Brabax', 'A2', 5.2, ZUHAUSE],
-    ['Califax', 'B1', 3.4, ZUHAUSE], ['Abrax', 'A1', 2.8, ZUHAUSE], ['Don Ferrando', 'B2', 2.1, BURG],
-    ['Brabax', 'A4', 1.3, ZUHAUSE], ['Califax', 'B3', 0.6, ZUHAUSE], ['Abrax', 'A2', 0.2, ZUHAUSE],
+    ['Califax', 'B1', 3.4, ZUHAUSE], ['Abrax', 'A1', 2.8, ZUHAUSE], ['Don Ferrando', 'BODEN', 2.1, BURG],
+    ['Brabax', 'A4', 1.3, ZUHAUSE], ['Califax', 'A2', 0.6, ZUHAUSE], ['Abrax', 'A2', 0.2, ZUHAUSE],
   ];
   const now = Date.now();
   kunden.forEach(([name, slotId, tage, leitcode], i) => {
@@ -356,7 +394,7 @@ export function seedDemo(userId) {
       ? '340434' + String(617000000000 + now % 1000000 * 7 + i * 104729).slice(0, 12)
       : 'JJD000390018' + String((now % 100000) * 10 + i).padStart(9, '0');
     const p = checkIn(userId, { tracking, carrier: 'DHL', leitcode, name, slotId });
-    p.inAt = new Date(now - tage * 86400000).toISOString();
+    p.inAt = p.placedAt = new Date(now - tage * 86400000).toISOString();
   });
   // Ein paar abgeschlossene für das Reporting
   for (let d = 1; d <= 14; d++) {

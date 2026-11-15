@@ -6,7 +6,7 @@ import { computeStats, dayChart, barChart, parcelsCsv } from './report.js';
 import { icon } from './icons.js';
 
 const BRAND = 'Willbrandt und Kompagnon';
-const APP_VERSION = '14';
+const APP_VERSION = '15';
 const AUTO_LOGOUT_MIN = 20;
 // Test-App: wird von der Vorführseite gesetzt (window.PAKETLAGER_TEST = true)
 const TEST_APP = window.PAKETLAGER_TEST === true;
@@ -390,7 +390,7 @@ function viewEin() {
               <span class="step-title">Box</span>
             </div>
             <div class="step-body">
-              <p class="hint">Paket in eine Box mit Platz legen, dann das Etikett der Box scannen.</p>
+              <p class="hint">Paket <b>immer hinten</b> in eine Box mit Platz legen, dann das Etikett der Box scannen.</p>
               <button type="button" class="btn primary big" id="cam2">${icon('scan')}Box scannen</button>
               <div class="or"><span>oder auswählen</span></div>
               <select id="slot" aria-label="Box auswählen"></select>
@@ -408,8 +408,10 @@ function viewEin() {
   const code = $('#code'), name = $('#name'), slot = $('#slot');
   const rerender = () => viewEin();
 
-  slot.innerHTML = '<option value="">Box wählen …</option>' + store.listSlots().map(s =>
-    `<option value="${esc(s.id)}">${esc(s.id)}${s.label ? ' · ' + esc(s.label) : ''}</option>`).join('');
+  slot.innerHTML = '<option value="">Box wählen …</option>' + store.listSlots().map(s => {
+    const n = store.slotCount(s.id);
+    return `<option value="${esc(s.id)}">${esc(s.id)}${s.label ? ' · ' + esc(s.label) : ''} · ${n ? n + (n === 1 ? ' Paket' : ' Pakete') : 'leer'}</option>`;
+  }).join('');
 
   function handleCode(raw) {
     const c = classifyCode(raw);
@@ -472,7 +474,8 @@ function viewEin() {
     try {
       const p = store.checkIn(user.id, draft, { allowDuplicate: TEST_APP });
       feedback();
-      toast(`✓ ${p.name} liegt in Box ${p.slotId}`, { action: 'Rückgängig', onAction: () => { store.cancelCheckIn(user.id, p.id); toast('Einlagerung zurückgenommen.', { type: 'info' }); viewEin(); } });
+      const pos = store.positionOf(p);
+      toast(pos ? `✓ ${p.name}: Box ${p.slotId}, ${pos}. von vorne` : `✓ ${p.name} liegt auf ${p.slotId}`, { action: 'Rückgängig', onAction: () => { store.cancelCheckIn(user.id, p.id); toast('Einlagerung zurückgenommen.', { type: 'info' }); viewEin(); } });
       resetDraft();
       viewEin();
     } catch (err) { toast(err.message, { type: 'error' }); }
@@ -529,7 +532,7 @@ function viewEin() {
 function renderRecent() {
   const recent = store.storedParcels().slice().sort((a, b) => b.inAt.localeCompare(a.inAt)).slice(0, 6);
   $('#recent').innerHTML = recent.length
-    ? `<ul class="list">${recent.map(p => `<li><span class="slot-badge">${esc(p.slotId)}</span><span class="grow">${esc(p.name)}</span><span class="muted">${fmtDateTime(p.inAt)}</span></li>`).join('')}</ul>`
+    ? `<ul class="list">${recent.map(p => `<li><span class="slot-badge">${esc(p.slotId)}${store.positionOf(p) ? ' · ' + store.positionOf(p) + '.' : ''}</span><span class="grow">${esc(p.name)}</span><span class="muted">${fmtDateTime(p.inAt)}</span></li>`).join('')}</ul>`
     : '<p class="muted">Noch nichts eingelagert.</p>';
 }
 
@@ -558,12 +561,18 @@ function viewAus() {
   q.focus(); // bereit für die Scan-Taste eines Handscanners; die Bildschirmtastatur bleibt zu
 }
 
+/** „3. von vorne“ oder bei Bodenflächen die Bezeichnung. */
+function posLine(p) {
+  const pos = store.positionOf(p);
+  return pos ? `<span class="pos">${pos}. von vorne</span>` : `<span class="muted small">${esc(store.getSlot(p.slotId)?.label ?? '')}</span>`;
+}
+
 function parcelCard(p, { actions = true } = {}) {
   const days = store.daysStored(p);
   const overdue = store.dueDate(p) < new Date();
   return `
     <article class="parcel ${overdue ? 'overdue' : ''}" data-id="${p.id}">
-      <div class="where"><span class="label">Box</span><span class="slot-big">${esc(p.slotId)}</span><span class="muted small">${esc(store.getSlot(p.slotId)?.label ?? '')}</span></div>
+      <div class="where"><span class="label">Box</span><span class="slot-big">${esc(p.slotId)}</span>${posLine(p)}</div>
       <div class="what">
         <div class="pname">${esc(p.name)}</div>
         <div class="muted small">${esc(shortTracking(p.tracking))} · seit ${fmtDate(p.inAt)} (${days} ${days === 1 ? 'Tag' : 'Tage'})</div>
@@ -646,6 +655,16 @@ function doOut(ids) {
 
 // ---------------- Bestand ----------------
 
+/** Position mit Pfeilen zum Korrigieren der Reihenfolge. */
+function posCell(p) {
+  const pos = store.positionOf(p);
+  if (!pos) return '<span class="muted">–</span>';
+  const n = store.slotCount(p.slotId);
+  return `<span class="posnum">${pos}.</span>`
+    + `<button class="btn small ghost arrow" data-shift="-1" data-id="${p.id}" ${pos === 1 ? 'disabled' : ''} aria-label="Eine Stelle nach vorne">↑</button>`
+    + `<button class="btn small ghost arrow" data-shift="1" data-id="${p.id}" ${pos === n ? 'disabled' : ''} aria-label="Eine Stelle nach hinten">↓</button>`;
+}
+
 function viewBestand() {
   const now = new Date();
   main.innerHTML = `
@@ -661,24 +680,26 @@ function viewBestand() {
   $$('#mode button').forEach(x => x.classList.toggle('on', x.dataset.m === mode));
   const draw = () => {
     const q = $('#q').value.trim().toLowerCase();
-    let rows = store.storedParcels().slice().sort((a, b) => a.inAt.localeCompare(b.inAt));
+    let rows = store.listSlots(true).flatMap(s => store.slotOrder(s.id));
     if (mode === 'frist') rows = rows.filter(p => store.dueDate(p) < now);
     if (mode === 'bald') rows = rows.filter(p => { const d = store.dueDate(p); return d >= now && d - now < 2 * 86400000; });
     if (q) rows = rows.filter(p => (p.name + ' ' + p.tracking + ' ' + p.slotId).toLowerCase().includes(q));
     const slotOpts = store.listSlots().map(s => `<option value="${esc(s.id)}">${esc(s.id)}</option>`).join('');
     $('#tbl').innerHTML = rows.length ? `
       <div class="table-wrap"><table>
-        <thead><tr><th>Box</th><th>Name</th><th>Sendung</th><th>Seit</th><th>Frist</th><th></th></tr></thead>
+        <thead><tr><th>Box</th><th>Pos.</th><th>Name</th><th>Sendung</th><th>Seit</th><th>Frist</th><th></th></tr></thead>
         <tbody>${rows.map(p => {
           const due = store.dueDate(p);
           return `<tr class="${due < now ? 'overdue' : ''}">
             <td><select data-move="${p.id}" aria-label="Umlagern">${slotOpts.replace(`value="${esc(p.slotId)}"`, `value="${esc(p.slotId)}" selected`)}</select></td>
+            <td class="posc">${posCell(p)}</td>
             <td>${esc(p.name)}</td><td class="mono">${esc(shortTracking(p.tracking))}</td>
             <td>${fmtDate(p.inAt)}</td><td>${fmtDate(due)}</td>
             <td><button class="btn small" data-ret="${p.id}">Retoure</button></td></tr>`;
         }).join('')}</tbody></table></div>
       <p class="muted small">${rows.length} Pakete</p>` : '<p class="muted">Keine Pakete.</p>';
-    $$('[data-move]').forEach(s => s.onchange = () => { store.moveParcel(user.id, s.dataset.move, s.value); toast(`Umgelagert in Box ${s.value}`); });
+    $$('[data-move]').forEach(s => s.onchange = () => { store.moveParcel(user.id, s.dataset.move, s.value); toast(`Umgelagert in Box ${s.value} (hinten einlegen)`); draw(); });
+    $$('[data-shift]').forEach(b => b.onclick = () => { store.shiftOrder(user.id, b.dataset.id, +b.dataset.shift); draw(); });
     $$('[data-ret]').forEach(b => b.onclick = () => {
       const id = b.dataset.ret;
       store.checkOut(user.id, id, 'retoure');
@@ -765,12 +786,13 @@ function viewPlaetze() {
     <section class="card">
       <div class="row-between"><h2>Alle Boxen</h2><button class="btn outline" id="printqr">${icon('drucken')}QR-Etiketten</button></div>
       <div class="table-wrap"><table>
-        <thead><tr><th><input type="checkbox" id="all" checked aria-label="Alle"></th><th>Code</th><th>Bezeichnung</th><th>Pakete</th><th>Aktiv</th></tr></thead>
+        <thead><tr><th><input type="checkbox" id="all" checked aria-label="Alle"></th><th>Code</th><th>Bezeichnung</th><th>Pakete</th><th>Reihenfolge zählen</th><th>Aktiv</th></tr></thead>
         <tbody>${slots.map(s => `<tr data-id="${esc(s.id)}" class="${s.active ? '' : 'inactive'}">
           <td><input type="checkbox" class="sel" ${s.active ? 'checked' : ''} aria-label="Auswählen"></td>
           <td><b>${esc(s.id)}</b></td>
           <td><input data-f="label" value="${esc(s.label)}"></td>
           <td>${store.slotCount(s.id)}</td>
+          <td><input type="checkbox" data-f="ordered" ${s.noOrder ? '' : 'checked'} aria-label="Reihenfolge zählen"></td>
           <td><input type="checkbox" data-f="active" ${s.active ? 'checked' : ''} aria-label="Aktiv"></td></tr>`).join('')}</tbody>
       </table></div>
     </section>
@@ -779,6 +801,7 @@ function viewPlaetze() {
         <form id="one" class="stack">
           <label>Code<input name="id" required placeholder="z. B. A3" maxlength="12"></label>
           <label>Bezeichnung<input name="label" placeholder="z. B. Regal A, Box 3"></label>
+          <label class="check"><input type="checkbox" name="noOrder"> Bodenfläche – keine Reihenfolge zählen (schwere Pakete werden nicht nach hinten geschoben)</label>
           <button class="btn primary">Anlegen</button>
         </form></section>
       <section class="card"><h2>Ein ganzes Regal anlegen</h2>
@@ -796,7 +819,7 @@ function viewPlaetze() {
       inp.checked = true;
       return toast('In dieser Box liegen noch Pakete.', { type: 'error' });
     }
-    store.updateSlot(id, { [f]: f === 'active' ? inp.checked : inp.value });
+    store.updateSlot(id, f === 'ordered' ? { noOrder: !inp.checked } : { [f]: f === 'active' ? inp.checked : inp.value });
     toast('Gespeichert.');
     if (f === 'active') viewPlaetze();
   });
